@@ -57,11 +57,20 @@ export interface UserState {
   email?: string;
   goal?: string; 
   currentTrail?: string;
+  currentLevel: 'Básico' | 'Intermediário' | 'Especialista';
   currentModuleIndex: number;
   currentSlideIndex: number;
   currentModuleContent?: ModuleContent;
   completedQuizzes: number[];
+  quizCount: number; // Total quizzes completed in current session/rhythm
+  correctQuizzesCount: {
+    Básico: number;
+    Intermediário: number;
+    Especialista: number;
+  };
   points: number;
   level: number;
   badges?: string[];
+  feedbackNeeded: boolean;
+  lastFeedbackScore?: 'positivo' | 'neutro' | 'negativo';
 }

@@ -3,6 +3,8 @@ import React, { useEffect, useState } from 'react';
 import type { UserRole, UserState } from '../types';
 import { AdminIcon, UserIcon, BrainIcon, CheckCircleIcon, SparklesIcon, TrashIcon, XMarkIcon, ExclamationCircleIcon } from './Icons';
 import { useAccessibility } from '../App';
+import { auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut, db } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 interface RoleSelectorProps {
   onSelectRole: (role: UserRole, resume?: boolean) => void;
@@ -14,32 +16,58 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
   const [showNewLogin, setShowNewLogin] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(true);
   const [showUnderConstruction, setShowUnderConstruction] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('alice_progress');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.userState && parsed.messages && parsed.messages.length > 0) {
-          setTimeout(() => {
-             setSavedUser(parsed.userState);
-             setIsAuthenticating(false);
-          }, 800);
-        } else {
-            setIsAuthenticating(false);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        // Tenta buscar do Firestore
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.email!.toLowerCase()));
+          if (userDoc.exists()) {
+            setSavedUser(userDoc.data() as UserState);
+          } else {
+            // Fallback para localStorage se não houver no Firestore
+            const savedV2 = localStorage.getItem('alice_progress_v2');
+            if (savedV2) {
+              setSavedUser(JSON.parse(savedV2));
+            }
+          }
+        } catch (e) {
+          console.error("Erro ao buscar usuário do Firestore:", e);
         }
-      } catch (e) {
-        setIsAuthenticating(false);
+      } else {
+        setCurrentUser(null);
+        setSavedUser(null);
       }
-    } else {
-        setIsAuthenticating(false);
-    }
+      setIsAuthenticating(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const handleClearData = (e: React.MouseEvent) => {
+  const handleGoogleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Erro no login Google:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Erro ao sair:", error);
+    }
+  };
+
+  const handleClearData = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm("Isso apagará seu progresso neste dispositivo. Deseja continuar?")) {
-        localStorage.removeItem('alice_progress');
+    if (window.confirm("Isso apagará seu progresso salvo. Deseja continuar?")) {
+        localStorage.removeItem('alice_progress_v2');
+        await signOut(auth);
         setSavedUser(null);
         setShowNewLogin(true);
     }
@@ -128,13 +156,13 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
       </div>
 
       <div className="w-full space-y-5">
-        <button onClick={() => setShowUnderConstruction('Google')} className="w-full bg-white text-gray-800 font-bold py-4 px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all">
-          <GoogleLogo /> Continuar com Google
+        <button onClick={handleGoogleLogin} className="w-full bg-white text-gray-800 font-bold py-4 px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all">
+          <GoogleLogo /> {currentUser ? `Logado como ${currentUser.displayName}` : 'Continuar com Google'}
         </button>
 
         <button onClick={() => setShowUnderConstruction('Gov.br')} className="w-full bg-[#1351B4] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all">
            <div className="w-6 h-6 mr-2 bg-white rounded-full flex items-center justify-center text-[#1351B4] font-black text-[10px]">br</div>
-           Entrar com Gov.br
+           Entrar com Gov.br (Inativo)
         </button>
 
         <div className="flex items-center gap-4 py-4">

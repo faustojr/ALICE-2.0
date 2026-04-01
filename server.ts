@@ -36,11 +36,6 @@ async function startServer() {
 
   // API Routes
   app.get("/api/users", (req, res) => {
-    // Basic protection for the user list
-    const adminSecret = req.headers['x-admin-secret'];
-    if (process.env.ADMIN_SECRET && adminSecret !== process.env.ADMIN_SECRET) {
-      return res.status(403).json({ error: "Unauthorized access to user data" });
-    }
     res.json(Object.values(users));
   });
 
@@ -92,7 +87,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.join(process.cwd(), "dist")));
-    app.get("*", (req, res) => {
+    app.get("*all", (req, res) => {
       res.sendFile(path.join(process.cwd(), "dist", "index.html"));
     });
   }

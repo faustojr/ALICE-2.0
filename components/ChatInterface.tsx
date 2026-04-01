@@ -57,7 +57,7 @@ const ChatInterface: React.FC<{ onBack: () => void; resume?: boolean }> = ({ onB
                 })
             }).catch(err => console.error("Erro ao sincronizar:", err));
         }
-    }, [userState.points, userState.level, userState.currentModuleIndex, userState.currentTrail, userState.goal, userState.email, userState.name]);
+    }, [userState.points, userState.level, userState.currentModuleIndex, userState.currentSlideIndex, userState.currentTrail, userState.goal, userState.email, userState.name]);
 
     useEffect(() => {
         if (showPointsModal) {
@@ -68,55 +68,64 @@ const ChatInterface: React.FC<{ onBack: () => void; resume?: boolean }> = ({ onB
         }
     }, [showPointsModal]);
 
+    const isPreloadingRef = useRef(false);
+
+    const moduleCacheRef = useRef<Record<number, ModuleContent>>(moduleCache);
+    
+    // Sincroniza o ref com o estado quando o estado muda (vindo de fora ou do próprio worker)
+    useEffect(() => {
+        moduleCacheRef.current = moduleCache;
+    }, [moduleCache]);
+
     /**
      * WORKER DE ANTECIPAÇÃO E RECUPERAÇÃO
      * Prioriza sempre o módulo ATUAL se ele não estiver no cache.
      */
     const fillCache = useCallback(async () => {
-        if (isPreloading) return;
-        
-        const bufferSize = 2; // Quantos módulos manter à frente
-        
-        // Limpeza de cache para evitar consumo excessivo de memória em tempo de execução
         const currentIdx = userState.currentModuleIndex;
-        const cacheKeys = Object.keys(moduleCache).map(Number);
-        if (cacheKeys.length > 10) {
-            const keysToRemove = cacheKeys.filter(k => k < currentIdx - 1 || k > currentIdx + 5);
-            if (keysToRemove.length > 0) {
-                setModuleCache(prev => {
-                    const newCache = { ...prev };
-                    keysToRemove.forEach(k => delete newCache[k]);
-                    return newCache;
-                });
-                return; // Sai para processar a limpeza antes de carregar novos
+        
+        // Always load the CURRENT module if it's not in cache
+        if (!moduleCacheRef.current[currentIdx]) {
+            isPreloadingRef.current = true;
+            setIsPreloading(true);
+            setError(null);
+            try {
+                const data = await generateReelsModule(
+                    userState.currentTrail || 'Lei 14.133',
+                    currentIdx,
+                    userState.goal || 'Iniciante'
+                );
+                setModuleCache(prev => ({ ...prev, [currentIdx]: data }));
+            } catch (e) {
+                console.error('Erro ao carregar módulo atual:', e);
+                setError("Não foi possível carregar o conteúdo.");
+            } finally {
+                isPreloadingRef.current = false;
+                setIsPreloading(false);
             }
         }
-
-        // Verifica do módulo atual até o buffer
-        for (let i = 0; i <= bufferSize; i++) {
-            const targetIdx = currentIdx + i;
-            
-            if (!moduleCache[targetIdx]) {
-                setIsPreloading(true);
-                setError(null);
-                try {
-                    const data = await generateReelsModule(
-                        userState.currentTrail || 'Lei 14.133', 
-                        targetIdx, 
-                        userState.goal || 'Iniciante'
-                    );
-                    setModuleCache(prev => ({ ...prev, [targetIdx]: data }));
-                } catch (e) {
-                    console.error("Erro ao carregar conteúdo:", e);
-                    if (i === 0) setError("Não foi possível carregar o conteúdo. Verifique sua conexão.");
-                } finally {
-                    setIsPreloading(false);
+        
+        // Then prefetch next modules in background (only if not already loading)
+        if (!isPreloadingRef.current) {
+            const bufferSize = 2;
+            for (let i = 1; i <= bufferSize; i++) {
+                const targetIdx = currentIdx + i;
+                if (!moduleCacheRef.current[targetIdx]) {
+                    try {
+                        const data = await generateReelsModule(
+                            userState.currentTrail || 'Lei 14.133',
+                            targetIdx,
+                            userState.goal || 'Iniciante'
+                        );
+                        setModuleCache(prev => ({ ...prev, [targetIdx]: data }));
+                    } catch (e) {
+                        console.error(`Erro ao prefetch módulo ${targetIdx}:`, e);
+                    }
+                    break; // One at a time to not overload API
                 }
-                // Faz apenas uma requisição por ciclo para evitar rate-limit
-                break; 
             }
         }
-    }, [userState.currentModuleIndex, moduleCache, isPreloading, userState.currentTrail, userState.goal]);
+    }, [userState.currentModuleIndex, userState.currentTrail, userState.goal]);
 
     useEffect(() => {
         fillCache();
@@ -145,7 +154,7 @@ const ChatInterface: React.FC<{ onBack: () => void; resume?: boolean }> = ({ onB
     };
 
     const handleQuizAnswer = (opt: Option) => {
-        const isCorrect = opt.value === 'correct';
+        const isCorrect = String(opt.value).trim().toLowerCase() === 'correct';
         setQuizResult(isCorrect ? 'correct' : 'wrong');
         setStage('FEEDBACK_VIEW');
         if (isCorrect) {
@@ -154,13 +163,18 @@ const ChatInterface: React.FC<{ onBack: () => void; resume?: boolean }> = ({ onB
     };
 
     const nextModule = () => {
-        setUserState(prev => ({ 
-            ...prev, 
-            currentModuleIndex: prev.currentModuleIndex + 1, 
-            currentSlideIndex: 0 
+        const nextIdx = userState.currentModuleIndex + 1;
+        setUserState(prev => ({
+            ...prev,
+            currentModuleIndex: nextIdx,
+            currentSlideIndex: 0
         }));
         setStage('REELS_VIEW');
         setQuizResult(null);
+        setIsPreloading(true);
+        setError(null);
+        // Force reset the preloading ref so fillCache can run
+        isPreloadingRef.current = false;
     };
 
     const handleLogin = async () => {
@@ -409,7 +423,10 @@ const ChatInterface: React.FC<{ onBack: () => void; resume?: boolean }> = ({ onB
                     </p>
 
                     <button 
-                        onClick={quizResult === 'correct' ? nextModule : () => setStage('REELS_VIEW')}
+                        onClick={quizResult === 'correct' ? nextModule : () => {
+                            setUserState(prev => ({ ...prev, currentSlideIndex: 0 }));
+                            setStage('REELS_VIEW');
+                        }}
                         className={`w-full py-5 rounded-2xl font-black text-xl shadow-2xl active:scale-95 transition-all ${quizResult === 'correct' ? 'bg-blue-600 text-white' : 'bg-white text-black'}`}
                     >
                         {quizResult === 'correct' ? 'Próximo Módulo' : 'Rever Aula'}

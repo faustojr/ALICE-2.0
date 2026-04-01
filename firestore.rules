@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {email} (string)
+    // Fields:
+    //   - email: string (required, format: email)
+    //   - name: string (optional)
+    //   - points: number (required, >= 0)
+    //   - currentLevel: string (required, enum: ["Básico", "Intermediário", "Especialista"])
+    //   - correctQuizzesCount: map (required)
+    //   - quizCount: number (required, >= 0)
+    //   - area: string (optional)
+    //   - bestTopic: string (optional)
+    //   - softSkillsLevel: string (optional)
+    //   - lastAccess: string (optional, ISO 8601)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(email) {
+      return isAuthenticated() && (request.auth.token.email.lower() == email.lower());
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.token.email.lower())).data.role == 'admin' ||
+         (request.auth.token.email == "faustomax@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'points', 'currentLevel']) &&
+             data.email is string && isValidEmail(data.email) &&
+             data.points is number && data.points >= 0 &&
+             data.currentLevel in ['Básico', 'Intermediário', 'Especialista'] &&
+             data.quizCount is number && data.quizCount >= 0;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{email} {
+      // Allow read if user is owner or admin
+      // Note: For the pilot, we allow read if authenticated to enable the dashboard to see all users
+      // but in production this should be restricted to isAdmin()
+      allow read: if isAuthenticated(); 
+      
+      // Allow create if data is valid and user is owner or admin
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(email) || isAdmin());
+      
+      // Allow update if data is valid and user is owner or admin
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(email) || isAdmin());
+      
+      // Only admin can delete
+      allow delete: if isAdmin();
+    }
+
+    match /test/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

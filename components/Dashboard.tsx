@@ -4,6 +4,8 @@ import { ArrowLeftIcon, DownloadIcon, FunnelIcon, XMarkIcon, CheckCircleIcon, Br
 import { toPng } from 'html-to-image';
 import LawsManager from './LawsManager';
 import SoftSkillsManager from './SoftSkillsManager';
+import { db } from '../firebase';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 interface DashboardProps {
   onBack: () => void;
@@ -454,39 +456,30 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [currentView, setCurrentView] = useState<DashboardView>('MAIN');
   const [rankingFilter, setRankingFilter] = useState('Geral');
   const [serverData, setServerData] = useState<UserPerformance[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   
   // Modals state
   const [showAssessmentModal, setShowAssessmentModal] = useState(false);
   const [showReportConfig, setShowReportConfig] = useState(false);
   const [currentReportConfig, setCurrentReportConfig] = useState<any>(null);
 
-  // Fetch data from API
+  // Fetch data from Firestore
   useEffect(() => {
-    const fetchData = async () => {
-        try {
-            const response = await fetch('/api/users', {
-                headers: {
-                    'x-admin-secret': (import.meta as any).env.VITE_ADMIN_SECRET || ''
-                }
-            });
-            if (!response.ok) {
-                if (response.status === 403) {
-                    throw new Error("Acesso negado: Segredo de administrador inválido.");
-                }
-                throw new Error("Falha ao carregar dados do servidor.");
-            }
-            const data = await response.json();
-            setServerData(data);
-        } catch (error) {
-            console.error("Erro ao buscar dados:", error);
-            // Fallback para dados mock se a API falhar ou acesso negado
-            setServerData(SERVER_DATA);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    fetchData();
+    setIsLoading(true);
+    const q = query(collection(db, 'users'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const users: UserPerformance[] = [];
+      snapshot.forEach((doc) => {
+        users.push(doc.data() as UserPerformance);
+      });
+      setServerData(users);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Erro ao buscar dados do Firestore:", error);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Lógica para ordenar e filtrar o ranking

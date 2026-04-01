@@ -1,0 +1,30 @@
+# Configuração IAM do Projeto ALICE
+# Este arquivo documenta as Service Accounts e seus papéis para fins de infraestrutura.
+
+service_accounts:
+  - name: alice-backend-sa
+    display_name: "ALICE Backend Service Account"
+    purpose: "Execução do backend no Cloud Run e acesso a serviços de IA e segredos."
+    roles:
+      - roles/aiplatform.user             # Acesso ao Vertex AI
+      - roles/run.invoker                 # Permissão para invocar serviços Cloud Run
+      - roles/secretmanager.secretAccessor # Acesso aos valores dos segredos no Secret Manager
+
+  - name: alice-deploy-sa
+    display_name: "ALICE Deployment Service Account"
+    purpose: "Pipeline de CI/CD para deploy de infraestrutura e aplicação."
+    roles:
+      - roles/run.admin                   # Gerenciamento total do Cloud Run
+      - roles/storage.objectAdmin         # Upload de artefatos de build para o GCS
+      - roles/secretmanager.viewer        # Visualização de metadados de segredos
+
+  - name: alice-firebase-sa
+    display_name: "ALICE Firebase Service Account"
+    purpose: "Operações administrativas do Firebase e Hosting."
+    roles:
+      - roles/firebase.sdkAdminServiceAgent # Administrador do SDK do Firebase
+
+# Papéis PROIBIDOS (Antipadrões de Segurança):
+# - roles/owner
+# - roles/editor
+# - roles/resourcemanager.projectIamAdmin

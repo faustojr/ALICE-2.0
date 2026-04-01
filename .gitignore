@@ -10,7 +10,28 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-*.local
+
+# Credenciais e secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!metadata.json
+*service-account*.json
+*credentials*.json
+*keyfile*.json
+.gcloud/
+gcloud-service-key.json
+
+# Firebase
+.firebaserc
+firebase-debug.log
+.firebase/
 
 # Editor directories and files
 .vscode/*
