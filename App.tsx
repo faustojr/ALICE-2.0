@@ -1,10 +1,13 @@
 
-import React, { useState, createContext, useContext } from 'react';
+import React, { useState, createContext, useContext, useEffect } from 'react';
 import type { UserRole, AccessibilityState, FontSize } from './types';
 import RoleSelector from './components/RoleSelector';
 import Dashboard from './components/Dashboard';
-import ChatInterface from './components/ChatInterface';
 import MicrolearningFeed from './components/MicrolearningFeed';
+import PrePilotSurvey from './components/PrePilotSurvey';
+import { Trophy } from 'lucide-react';
+import { auth, db, onAuthStateChanged } from './firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 // Contexto de Acessibilidade
 export const AccessibilityContext = createContext<AccessibilityState>({
@@ -20,20 +23,74 @@ export const useAccessibility = () => useContext(AccessibilityContext);
 
 const App: React.FC = () => {
   const [role, setRole] = useState<UserRole | null>(null);
-  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT'>('MAIN');
+  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY'>('MAIN');
   const [selectedLevel, setSelectedLevel] = useState<'Básico' | 'Intermediário' | 'Especialista'>('Básico');
   const [resume, setResume] = useState(false);
+  const [startSurvey, setStartSurvey] = useState(false);
   
   // Estado de Acessibilidade
   const [highContrast, setHighContrast] = useState(false);
   const [fontSize, setFontSize] = useState<FontSize>('normal');
   const [screenReaderMode, setScreenReaderMode] = useState(false);
 
-  const handleRoleSelect = (selectedRole: UserRole, shouldResume: boolean = false) => {
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [hasPreSurveyCompleted, setHasPreSurveyCompleted] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user || null);
+      if (user) {
+        try {
+          const emailKey = user.email!.toLowerCase();
+          const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
+          const surveyDocSnapshot = await getDoc(surveyDocRef);
+          
+          if (surveyDocSnapshot.exists()) {
+            const data = surveyDocSnapshot.data();
+            if (data && (
+              data.pre_generalKnowledge !== undefined || 
+              data.pre_tempoAtuacao !== undefined || 
+              data.pre_experienceTime !== undefined
+            )) {
+              setHasPreSurveyCompleted(true);
+            } else {
+              setHasPreSurveyCompleted(false);
+            }
+          } else {
+            setHasPreSurveyCompleted(false);
+          }
+        } catch (err) {
+          console.error("Erro ao verificar questionário pré-piloto no App:", err);
+          setHasPreSurveyCompleted(true); // Fallback seguro
+        }
+      } else {
+        setHasPreSurveyCompleted(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleRoleSelect = (
+    selectedRole: UserRole, 
+    shouldResume: boolean = false, 
+    savedLevel?: 'Básico' | 'Intermediário' | 'Especialista'
+  ) => {
     setRole(selectedRole);
     setResume(shouldResume);
     if (selectedRole === 'ALUNO') {
-      setView('LEVEL_SELECT');
+      if (hasPreSurveyCompleted === false) {
+        setView('MAIN'); // renderContent irá interceptar e mandar para o questionário
+      } else {
+        if (shouldResume) {
+          if (savedLevel) {
+            setSelectedLevel(savedLevel);
+          }
+          setView('REELS');
+        } else {
+          setView('LEVEL_SELECT');
+        }
+      }
     }
   };
 
@@ -42,13 +99,19 @@ const App: React.FC = () => {
     setView('MAIN');
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    setStartSurvey(false);
     if (view === 'LEVEL_SELECT') {
       setRole(null);
       setView('MAIN');
     } else if (view !== 'MAIN') {
       setView('MAIN');
     } else {
+      try {
+        await auth.signOut();
+      } catch (err) {
+        console.error("Erro ao sair da conta no App:", err);
+      }
       setRole(null);
       setResume(false);
     }
@@ -70,6 +133,37 @@ const App: React.FC = () => {
 
     if (role === 'GESTOR') {
       return <Dashboard onBack={handleBack} />;
+    }
+
+    if (role === 'ALUNO' && hasPreSurveyCompleted === null) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+          <div className="relative w-16 h-16 mb-4">
+            <div className={`absolute inset-0 border-4 rounded-full border-t-transparent animate-spin ${highContrast ? 'border-yellow-400' : 'border-blue-500'}`}></div>
+          </div>
+          <p className="text-slate-400 font-bold">Verificando status do piloto...</p>
+        </div>
+      );
+    }
+
+    if (role === 'ALUNO' && hasPreSurveyCompleted === false) {
+      return (
+        <PrePilotSurvey 
+          onComplete={() => {
+            setHasPreSurveyCompleted(true);
+            setView('LEVEL_SELECT');
+          }}
+          onBack={async () => {
+            setRole(null);
+            setView('MAIN');
+            try {
+              await auth.signOut();
+            } catch (err) {
+              console.error("Erro ao sair no questionário:", err);
+            }
+          }}
+        />
+      );
     }
 
     if (view === 'LEVEL_SELECT') {
@@ -106,11 +200,13 @@ const App: React.FC = () => {
 
     // Lógica para o ALUNO
     if (view === 'REELS') {
-      return <MicrolearningFeed onBack={handleBack} initialLevel={selectedLevel} />;
-    }
-
-    if (view === 'CHAT') {
-      return <ChatInterface onBack={handleBack} resume={resume} />;
+      return (
+        <MicrolearningFeed 
+          onBack={handleBack} 
+          initialLevel={selectedLevel} 
+          startWithPostSurvey={startSurvey} 
+        />
+      );
     }
 
     return (
@@ -130,21 +226,27 @@ const App: React.FC = () => {
             <p className="text-white/70 text-sm">Aprenda com pílulas rápidas e dinâmicas</p>
           </div>
           <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-40 transition-opacity">
-            <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M10 15l5.19-3L10 9v6zM21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c0 1.1.9-2 2-2zM5 19V5h14v14H5z"/></svg>
+            <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M10 15l5.19-3L10 9v6zM21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9-2 2-2h14c0 1.1.9-2 2-2zM5 19V5h14v14H5z"/></svg>
           </div>
         </button>
 
         <button 
-          onClick={() => setView('CHAT')}
-          className="w-full group relative overflow-hidden bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95"
+          onClick={() => {
+            setStartSurvey(true);
+            setView('REELS');
+          }}
+          className="w-full group relative overflow-hidden bg-gradient-to-br from-emerald-600 to-teal-700 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95 border border-emerald-500/30"
+          id="btn-direct-survey"
         >
           <div className="relative z-10 flex flex-col items-start text-left">
-            <span className="text-xs font-bold uppercase tracking-widest text-white/40 mb-2">Conversacional</span>
-            <h2 className="text-2xl font-bold text-white mb-1">Chat com ALICE</h2>
-            <p className="text-white/60 text-sm">Tire dúvidas e siga sua trilha personalizada</p>
+            <span className="text-xs font-bold uppercase tracking-widest text-white/60 mb-2 flex items-center gap-1.5">
+              Avaliação do Piloto <Trophy className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+            </span>
+            <h2 className="text-2xl font-bold text-white mb-1">Encerrar e Responder Pesquisa</h2>
+            <p className="text-white/70 text-sm">Responda o questionário final de pós-uso</p>
           </div>
-          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-10 group-hover:opacity-20 transition-opacity">
-            <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-25 group-hover:opacity-45 transition-opacity">
+            <Trophy className="w-20 h-20 text-white" />
           </div>
         </button>
 

@@ -5,6 +5,7 @@ import { toPng } from 'html-to-image';
 import LawsManager from './LawsManager';
 import SoftSkillsManager from './SoftSkillsManager';
 import { db } from '../firebase';
+import { PilotResultsPanel } from './PilotResultsPanel';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 interface DashboardProps {
@@ -457,6 +458,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [rankingFilter, setRankingFilter] = useState('Geral');
   const [serverData, setServerData] = useState<UserPerformance[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'PILOT'>('OVERVIEW');
   
   // Modals state
   const [showAssessmentModal, setShowAssessmentModal] = useState(false);
@@ -548,7 +550,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   ], [serverData.length]);
 
   return (
-    <div className="bg-slate-900 w-full h-full p-4 sm:p-6 rounded-2xl border border-slate-800 overflow-y-auto flex flex-col relative">
+    <div className="bg-slate-900 w-full h-full p-4 sm:p-6 rounded-2xl border border-slate-800 overflow-y-auto flex flex-col relative" id="manager-dashboard-container">
       {/* Modals */}
       {showAssessmentModal && <AssessmentModal onClose={() => setShowAssessmentModal(false)} />}
       {showReportConfig && <ReportConfigModal users={serverData} onClose={() => setShowReportConfig(false)} onGenerate={handleGenerateReport} />}
@@ -561,102 +563,136 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
         <h1 className="text-3xl font-bold text-white">Painel do Gestor</h1>
         {isLoading && <div className="ml-4 w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>}
       </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-800 mb-6 flex-shrink-0">
+        <button 
+          onClick={() => setActiveTab('OVERVIEW')}
+          className={`py-2.5 px-4 font-bold text-sm border-b-2 transition-all ${
+            activeTab === 'OVERVIEW' 
+              ? 'border-blue-500 text-blue-400' 
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          id="btn-tab-overview"
+        >
+          Visão Geral
+        </button>
+        <button 
+          onClick={() => setActiveTab('PILOT')}
+          className={`py-2.5 px-4 font-bold text-sm border-b-2 transition-all ${
+            activeTab === 'PILOT' 
+              ? 'border-blue-500 text-blue-400' 
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          id="btn-tab-pilot"
+        >
+          Resultados do Piloto
+        </button>
+      </div>
       
-      <div className="flex-grow">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {kpiData.map((kpi, index) => (
-                <KPICard 
-                    key={index}
-                    title={kpi.title} 
-                    value={kpi.value} 
-                    change={kpi.change} 
-                    changeType={kpi.changeType} 
-                />
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-            <div>
-              <h2 className="text-xl font-semibold text-white mb-4">Recursos de Administração</h2>
-              <div className="space-y-4">
-                <AdminButton onClick={() => window.open('https://docs.google.com/spreadsheets/d/1IBAo7JvhyysOc769WipnFWC4EJr6ns5jAUApriw-owY/edit?usp=sharing', '_blank')}>
-                    Cadastrar/Editar Leis e Normas
-                </AdminButton>
-                <AdminButton onClick={() => window.open('https://docs.google.com/spreadsheets/d/1LYiA-Nfky4c-ec6rEI--LADJH51cTmKpZNopEeWjjtQ/edit?usp=sharing', '_blank')}>
-                    Gerenciar Trilhas de Soft Skills
-                </AdminButton>
-                <AdminButton onClick={() => setShowAssessmentModal(true)}>
-                    Sobre os Critérios de Avaliação
-                </AdminButton>
-                <AdminButton onClick={() => setShowReportConfig(true)}>
-                    Solicitar Relatórios de Desempenho
-                </AdminButton>
+      {activeTab === 'OVERVIEW' ? (
+        <>
+          <div className="flex-grow">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                {kpiData.map((kpi, index) => (
+                    <KPICard 
+                        key={index}
+                        title={kpi.title} 
+                        value={kpi.value} 
+                        change={kpi.change} 
+                        changeType={kpi.changeType} 
+                    />
+                ))}
               </div>
-            </div>
 
-            <div>
-              <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-white">Ranking de Especialistas</h2>
-              </div>
-              
-              <div className="mb-4 relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <FunnelIcon className="h-5 w-5 text-slate-400" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                <div>
+                  <h2 className="text-xl font-semibold text-white mb-4">Recursos de Administração</h2>
+                  <div className="space-y-4">
+                    <AdminButton onClick={() => window.open('https://docs.google.com/spreadsheets/d/1IBAo7JvhyysOc769WipnFWC4EJr6ns5jAUApriw-owY/edit?usp=sharing', '_blank')}>
+                        Cadastrar/Editar Leis e Normas
+                    </AdminButton>
+                    <AdminButton onClick={() => window.open('https://docs.google.com/spreadsheets/d/1LYiA-Nfky4c-ec6rEI--LADJH51cTmKpZNopEeWjjtQ/edit?usp=sharing', '_blank')}>
+                        Gerenciar Trilhas de Soft Skills
+                    </AdminButton>
+                    <AdminButton onClick={() => setShowAssessmentModal(true)}>
+                        Sobre os Critérios de Avaliação
+                    </AdminButton>
+                    <AdminButton onClick={() => setShowReportConfig(true)}>
+                        Solicitar Relatórios de Desempenho
+                    </AdminButton>
                   </div>
-                  <select 
-                    value={rankingFilter}
-                    onChange={(e) => setRankingFilter(e.target.value)}
-                    className="block w-full pl-10 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer"
-                  >
-                      {RANKING_CATEGORIES.map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                  </select>
-              </div>
+                </div>
 
-              <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 transition-all duration-300">
-                <ul className="space-y-3">
-                  {filteredRanking.map((user, index) => {
-                    const score = rankingFilter === 'Geral' ? user.points : (user.specialties as any)[rankingFilter] || 0;
-                    return (
-                        <li key={user.name} className="flex items-center justify-between text-slate-300 p-2 rounded hover:bg-slate-700/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                            <span className={`
-                                flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold
-                                ${index === 0 ? 'bg-yellow-500 text-slate-900' : 
-                                index === 1 ? 'bg-slate-400 text-slate-900' :
-                                index === 2 ? 'bg-orange-700 text-slate-200' : 'bg-slate-700 text-slate-400'}
-                            `}>
-                                {index + 1}
-                            </span>
-                            <div className="flex flex-col">
-                                <span className={index === 0 ? "font-bold text-white" : ""}>{user.name}</span>
-                                {index === 0 && rankingFilter !== 'Geral' && (
-                                    <span className="text-[10px] text-yellow-400 uppercase tracking-wider font-bold">Especialista em {rankingFilter}</span>
-                                )}
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-xl font-semibold text-white">Ranking de Especialistas</h2>
+                  </div>
+                  
+                  <div className="mb-4 relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <FunnelIcon className="h-5 w-5 text-slate-400" />
+                      </div>
+                      <select 
+                        value={rankingFilter}
+                        onChange={(e) => setRankingFilter(e.target.value)}
+                        className="block w-full pl-10 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer"
+                      >
+                          {RANKING_CATEGORIES.map(cat => (
+                              <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 transition-all duration-300">
+                    <ul className="space-y-3">
+                      {filteredRanking.map((user, index) => {
+                        const score = rankingFilter === 'Geral' ? user.points : (user.specialties as any)[rankingFilter] || 0;
+                        return (
+                            <li key={user.name} className="flex items-center justify-between text-slate-300 p-2 rounded hover:bg-slate-700/50 transition-colors">
+                            <div className="flex items-center gap-3">
+                                <span className={`
+                                    flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold
+                                    ${index === 0 ? 'bg-yellow-500 text-slate-900' : 
+                                    index === 1 ? 'bg-slate-400 text-slate-900' :
+                                    index === 2 ? 'bg-orange-700 text-slate-200' : 'bg-slate-700 text-slate-400'}
+                                `}>
+                                    {index + 1}
+                                </span>
+                                <div className="flex flex-col">
+                                    <span className={index === 0 ? "font-bold text-white" : ""}>{user.name}</span>
+                                    {index === 0 && rankingFilter !== 'Geral' && (
+                                        <span className="text-[10px] text-yellow-400 uppercase tracking-wider font-bold">Especialista em {rankingFilter}</span>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                        <span className="font-mono bg-slate-900 border border-slate-700 text-slate-200 text-sm px-2 py-1 rounded">
-                            {score} pts
-                        </span>
-                        </li>
-                    );
-                  })}
-                </ul>
+                            <span className="font-mono bg-slate-900 border border-slate-700 text-slate-200 text-sm px-2 py-1 rounded">
+                                {score} pts
+                            </span>
+                            </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
               </div>
-            </div>
           </div>
-      </div>
 
-      <div className="mt-8 pt-6 border-t border-slate-700 flex justify-end">
-         <button 
-            onClick={handleExportCSV}
-            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 py-3 px-6 rounded-lg font-semibold transition-all shadow-md group"
-         >
-            <DownloadIcon className="w-5 h-5 text-slate-400 group-hover:text-white transition-colors" />
-            Exportar CSV (Ranking)
-         </button>
-      </div>
+          <div className="mt-8 pt-6 border-t border-slate-700 flex justify-end flex-shrink-0">
+             <button 
+                onClick={handleExportCSV}
+                className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 py-3 px-6 rounded-lg font-semibold transition-all shadow-md group"
+             >
+                <DownloadIcon className="w-5 h-5 text-slate-400 group-hover:text-white transition-colors" />
+                Exportar CSV (Ranking)
+             </button>
+          </div>
+        </>
+      ) : (
+        <div className="flex-grow overflow-y-auto">
+          <PilotResultsPanel />
+        </div>
+      )}
     </div>
   );
 };

@@ -29,6 +29,7 @@ export interface ModuleContent {
   options: Option[];
   feedbackCorrect: string;
   feedbackWrong: string;
+  variationId?: string;
 }
 
 export interface Message {
@@ -59,8 +60,10 @@ export interface UserState {
   currentTrail?: string;
   currentLevel: 'Básico' | 'Intermediário' | 'Especialista';
   currentModuleIndex: number;
+  highestModuleIndex?: number;
   currentSlideIndex: number;
   currentModuleContent?: ModuleContent;
+  currentFailCount?: number;
   completedQuizzes: number[];
   quizCount: number; // Total quizzes completed in current session/rhythm
   correctQuizzesCount: {
@@ -73,4 +76,6 @@ export interface UserState {
   badges?: string[];
   feedbackNeeded: boolean;
   lastFeedbackScore?: 'positivo' | 'neutro' | 'negativo';
+  lastStudyDate?: string | null;
+  streakDays?: number;
 }

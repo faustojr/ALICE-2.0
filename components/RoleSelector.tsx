@@ -3,11 +3,11 @@ import React, { useEffect, useState } from 'react';
 import type { UserRole, UserState } from '../types';
 import { AdminIcon, UserIcon, BrainIcon, CheckCircleIcon, SparklesIcon, TrashIcon, XMarkIcon, ExclamationCircleIcon } from './Icons';
 import { useAccessibility } from '../App';
-import { auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut, db } from '../firebase';
+import { auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut, db, setEmulatedUser } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 
 interface RoleSelectorProps {
-  onSelectRole: (role: UserRole, resume?: boolean) => void;
+  onSelectRole: (role: UserRole, resume?: boolean, savedLevel?: 'Básico' | 'Intermediário' | 'Especialista') => void;
 }
 
 const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
@@ -15,31 +15,46 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
   const [savedUser, setSavedUser] = useState<UserState | null>(null);
   const [showNewLogin, setShowNewLogin] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(true);
+  const [isFetchingUser, setIsFetchingUser] = useState(false);
   const [showUnderConstruction, setShowUnderConstruction] = useState<string | null>(null);
+  const [showLoginRequired, setShowLoginRequired] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+
+  const [typedEmail, setTypedEmail] = useState('');
+  const [loginStep, setLoginStep] = useState<'input' | 'confirm' | 'db_check'>('input');
+  const [isCheckingDb, setIsCheckingDb] = useState(false);
+  const [dbEmailFound, setDbEmailFound] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        setIsFetchingUser(true);
         setCurrentUser(user);
         // Tenta buscar do Firestore
         try {
-          const userDoc = await getDoc(doc(db, 'users', user.email!.toLowerCase()));
+          const emailKey = user.email!.toLowerCase();
+          const userDoc = await getDoc(doc(db, 'users', emailKey));
           if (userDoc.exists()) {
             setSavedUser(userDoc.data() as UserState);
           } else {
-            // Fallback para localStorage se não houver no Firestore
-            const savedV2 = localStorage.getItem('alice_progress_v2');
-            if (savedV2) {
-              setSavedUser(JSON.parse(savedV2));
+            // Fallback para localStorage apenas se pertencer ao próprio e-mail
+            const savedV3 = localStorage.getItem(`alice_progress_v3_${emailKey}`);
+            if (savedV3) {
+              setSavedUser(JSON.parse(savedV3));
+            } else {
+              setSavedUser(null);
             }
           }
         } catch (e) {
           console.error("Erro ao buscar usuário do Firestore:", e);
+        } finally {
+          setIsFetchingUser(false);
         }
       } else {
         setCurrentUser(null);
         setSavedUser(null);
+        setIsFetchingUser(false);
       }
       setIsAuthenticating(false);
     });
@@ -67,10 +82,65 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
     e.stopPropagation();
     if (window.confirm("Isso apagará seu progresso salvo. Deseja continuar?")) {
         localStorage.removeItem('alice_progress_v2');
+        localStorage.removeItem('alice_progress_v3');
+        const email = currentUser?.email;
+        if (email) {
+          localStorage.removeItem(`alice_progress_v3_${email.toLowerCase()}`);
+        }
         await signOut(auth);
         setSavedUser(null);
+        setTypedEmail('');
+        setLoginStep('input');
         setShowNewLogin(true);
     }
+  };
+
+  const validateEmail = (emailStr: string) => {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(emailStr.trim());
+  };
+
+  const handleSendEmail = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    const trimmed = typedEmail.trim();
+    if (!trimmed) {
+      setErrorMsg('Por favor, informe seu e-mail.');
+      return;
+    }
+    if (!validateEmail(trimmed)) {
+      setErrorMsg('Por favor, insira um e-mail válido.');
+      return;
+    }
+    setLoginStep('confirm');
+  };
+
+  const handleConfirmEmail = async () => {
+    setIsCheckingDb(true);
+    setErrorMsg('');
+    const emailLower = typedEmail.trim().toLowerCase();
+    try {
+      // Set the emulated user directly to initiate authentication and fetch progress
+      setEmulatedUser(emailLower);
+      setShowNewLogin(false);
+    } catch (err: any) {
+      console.error("Erro ao verificar e-mail no Firestore:", err);
+      // Fallback: log in anyway
+      setEmulatedUser(emailLower);
+      setShowNewLogin(false);
+    } finally {
+      setIsCheckingDb(false);
+    }
+  };
+
+  const handleUseConfirmedEmail = () => {
+    const emailLower = typedEmail.trim().toLowerCase();
+    setEmulatedUser(emailLower);
+  };
+
+  const handleCancelDbCheck = () => {
+    setLoginStep('input');
+    setDbEmailFound(false);
   };
 
   const GoogleLogo = () => (
@@ -107,7 +177,31 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
     </div>
   );
 
-  if (isAuthenticating) {
+  const LoginRequiredModal = () => (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
+        <div className={`max-w-sm w-full p-8 rounded-3xl border-2 text-center shadow-2xl transform animate-in zoom-in duration-300 ${highContrast ? 'bg-black border-yellow-400 text-yellow-300' : 'bg-slate-800 border-slate-700 text-white'}`}>
+            <div className="mb-6 flex justify-center">
+                <div className={`p-5 rounded-full ${highContrast ? 'bg-yellow-400 text-black' : 'bg-blue-500/20 text-blue-400'}`}>
+                    <AdminIcon className="w-14 h-14" />
+                </div>
+            </div>
+            <h2 className="text-2xl font-bold mb-4">Acesso Restrito</h2>
+            <p className={`mb-8 leading-relaxed ${highContrast ? 'text-white' : 'text-slate-300'}`}>
+                Para acessar o <strong>Painel do Gestor</strong>, você precisa primeiro se identificar com seu e-mail na tela inicial.
+            </p>
+            <div className="space-y-4">
+                <button 
+                    onClick={() => setShowLoginRequired(false)}
+                    className={`w-full py-4 rounded-2xl font-extrabold text-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-lg shadow-blue-600/30'}`}
+                >
+                    Se identificar agora
+                </button>
+            </div>
+        </div>
+    </div>
+  );
+
+  if (isAuthenticating || isFetchingUser) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
             <div className="relative w-24 h-24 mb-6">
@@ -119,22 +213,24 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
   }
 
   if (savedUser && !showNewLogin) {
+      const displayName = savedUser.name || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Servidor';
       return (
         <div className="w-full max-w-md mx-auto flex flex-col items-center justify-center p-6 text-center animate-in fade-in zoom-in duration-500">
             {showUnderConstruction && <UnderConstructionModal />}
             <div className="mb-8 relative">
                 <div className={`mx-auto w-28 h-28 rounded-full flex items-center justify-center mb-6 shadow-2xl border-4 ${highContrast ? 'bg-yellow-400 border-white' : 'bg-gradient-to-br from-blue-500 to-indigo-600 border-slate-700'}`}>
                     <span className={`text-5xl font-black ${highContrast ? 'text-black' : 'text-white'}`}>
-                        {savedUser.name?.charAt(0).toUpperCase()}
+                        {displayName.charAt(0).toUpperCase()}
                     </span>
                 </div>
-                <h1 className="text-4xl font-extrabold text-white mb-2">Olá, {savedUser.name}!</h1>
+                <h1 className="text-4xl font-extrabold text-white mb-2">Olá, {displayName}!</h1>
                 <p className="text-slate-400 text-lg">Seu progresso está salvo. Vamos continuar?</p>
             </div>
 
             <button 
-                onClick={() => onSelectRole('ALUNO', true)}
+                onClick={() => onSelectRole('ALUNO', true, savedUser.currentLevel)}
                 className={`w-full py-5 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95 hover:scale-[1.02] ${highContrast ? 'bg-yellow-400 text-black' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                id="btn-resume-journey"
             >
                 Continuar Jornada
             </button>
@@ -146,41 +242,174 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
       );
   }
 
+  if (currentUser && !savedUser && !showNewLogin) {
+      return (
+        <div className="w-full max-w-md mx-auto flex flex-col items-center justify-center p-6 text-center animate-in fade-in zoom-in duration-500">
+            <div className="mb-8">
+               <h2 className="text-3xl font-black text-white mb-4">Confirmação de Identidade</h2>
+               <div className="p-6 bg-white/5 border border-white/10 rounded-3xl text-left mb-6">
+                   <p className="text-slate-400 text-sm mb-1">Nome identificado:</p>
+                   <p className="text-white text-xl font-bold mb-4">{currentUser.displayName}</p>
+                   <p className="text-slate-400 text-sm mb-1">E-mail institucional/pessoal:</p>
+                   <p className="text-white text-lg font-medium">{currentUser.email}</p>
+               </div>
+               <p className="text-slate-300 text-lg">Podemos confirmar que é você mesmo?</p>
+            </div>
+            <div className="w-full space-y-4">
+                <button 
+                    onClick={() => onSelectRole('ALUNO', false)}
+                    className={`w-full font-black py-4 px-6 rounded-2xl text-xl transition-all active:scale-95 shadow-2xl ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-700 text-white shadow-blue-500/20'}`}
+                >
+                    ✓ Sim, sou eu! Começar
+                </button>
+                <button 
+                    onClick={handleLogout}
+                    className="w-full py-4 text-slate-400 hover:text-white font-bold transition-colors"
+                >
+                    Não, quero entrar com outra conta
+                </button>
+            </div>
+        </div>
+      );
+  }
+
   return (
     <div className="w-full max-w-md mx-auto flex flex-col items-center justify-center p-4 text-center animate-in slide-in-from-bottom-8 duration-700">
       {showUnderConstruction && <UnderConstructionModal />}
+      {showLoginRequired && <LoginRequiredModal />}
       
       <div className="mb-14">
-        <h1 className="text-6xl font-black text-white mb-4 tracking-tighter">ALICE</h1>
+        <h1 className="text-6xl font-black text-white mb-4 tracking-tighter">Olá!</h1>
         <p className="text-xl text-slate-400 font-medium">Capacitação Inteligente para Servidores</p>
       </div>
 
       <div className="w-full space-y-5">
-        <button onClick={handleGoogleLogin} className="w-full bg-white text-gray-800 font-bold py-4 px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all">
-          <GoogleLogo /> {currentUser ? `Logado como ${currentUser.displayName}` : 'Continuar com Google'}
-        </button>
-
-        <button onClick={() => setShowUnderConstruction('Gov.br')} className="w-full bg-[#1351B4] text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all">
-           <div className="w-6 h-6 mr-2 bg-white rounded-full flex items-center justify-center text-[#1351B4] font-black text-[10px]">br</div>
-           Entrar com Gov.br (Inativo)
-        </button>
-
-        <div className="flex items-center gap-4 py-4">
-            <div className="h-px bg-slate-800 flex-1"></div>
-            <span className="text-slate-600 text-xs font-black uppercase tracking-widest">OU</span>
-            <div className="h-px bg-slate-800 flex-1"></div>
+        <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-2xl mb-6 text-left">
+            <p className="text-blue-200 text-sm leading-relaxed">
+                <strong className="text-white">Identificação Necessária:</strong> Para que seu progresso conte no <strong>Ranking da Prefeitura</strong>, você precisa iniciar com uma conta identificada.
+            </p>
         </div>
 
-        <button
-          onClick={() => onSelectRole('ALUNO', false)}
-          className={`w-full font-black py-5 px-6 rounded-2xl text-2xl transition-all hover:scale-[1.03] active:scale-95 shadow-2xl ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-700 text-white shadow-blue-500/20'}`}
-        >
-          Começar Agora
-        </button>
+        {loginStep === 'input' && (
+          <form onSubmit={handleSendEmail} className="space-y-4">
+            <div className="flex gap-2">
+              <input
+                type="email"
+                placeholder="Insira seu e-mail para entrar"
+                value={typedEmail}
+                onChange={(e) => setTypedEmail(e.target.value)}
+                className={`flex-1 px-4 py-4 rounded-2xl bg-white/5 border text-base text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium ${
+                  highContrast ? 'border-yellow-400 bg-black text-yellow-300 placeholder:text-yellow-300/50' : 'border-white/10 placeholder:text-slate-500'
+                }`}
+              />
+              <button
+                type="submit"
+                className={`px-6 py-4 rounded-2xl font-bold flex items-center justify-center transition-all duration-200 active:scale-95 shadow-lg whitespace-nowrap ${
+                  highContrast
+                    ? 'bg-yellow-400 text-black border border-white hover:bg-yellow-300'
+                    : 'bg-blue-600 text-white hover:bg-blue-500 shadow-blue-600/30'
+                }`}
+              >
+                Enviar
+              </button>
+            </div>
+            {errorMsg && (
+              <p className={`text-sm font-semibold text-left ${highContrast ? 'text-yellow-400' : 'text-red-400'}`}>
+                {errorMsg}
+              </p>
+            )}
+          </form>
+        )}
+
+        {loginStep === 'confirm' && (
+          <div className={`p-6 border rounded-3xl text-center space-y-4 ${
+            highContrast ? 'border-yellow-400 bg-black' : 'bg-white/5 border-white/10'
+          }`}>
+            <h3 className="text-lg font-bold text-white">Confirme o seu e-mail</h3>
+            <p className="text-slate-400 text-sm">Este e-mail está correto?</p>
+            <div className={`py-3 px-4 rounded-xl font-bold text-lg inline-block break-all ${
+              highContrast ? 'border border-yellow-400 text-yellow-300' : 'bg-white/5 text-blue-400 border border-blue-500/20'
+            }`}>
+              {typedEmail}
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleConfirmEmail}
+                disabled={isCheckingDb}
+                className={`flex-1 py-3.5 rounded-xl font-bold transition-all active:scale-95 ${
+                  highContrast
+                    ? 'bg-yellow-400 text-black'
+                    : 'bg-blue-600 text-white hover:bg-blue-500'
+                }`}
+              >
+                {isCheckingDb ? 'Verificando...' : 'Confirmar e-mail'}
+              </button>
+              <button
+                onClick={() => setLoginStep('input')}
+                disabled={isCheckingDb}
+                className={`flex-1 py-3.5 rounded-xl font-semibold transition-all active:scale-95 ${
+                  highContrast
+                    ? 'border-2 border-yellow-400 bg-black text-yellow-300'
+                    : 'bg-white/10 text-white hover:bg-white/15'
+                }`}
+              >
+                Editar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {loginStep === 'db_check' && (
+          <div className={`p-6 border rounded-3xl text-center space-y-4 ${
+            highContrast ? 'border-yellow-400 bg-black' : 'bg-white/5 border-white/10'
+          }`}>
+            <div className="w-12 h-12 bg-green-500/15 rounded-full flex items-center justify-center mx-auto">
+              <CheckCircleIcon className="w-6 h-6 text-green-400" />
+            </div>
+            <h3 className="text-lg font-bold text-white">Cadastro Encontrado!</h3>
+            <p className="text-slate-400 text-sm leading-relaxed text-balance">
+              Identificamos um progresso salvo para o e-mail <strong className="text-white">{typedEmail}</strong> no banco de dados da prefeitura.
+            </p>
+            <p className="text-slate-300 font-medium text-sm">Confirmar e usar este e-mail?</p>
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={handleUseConfirmedEmail}
+                className={`w-full py-3.5 rounded-xl font-bold transition-all active:scale-95 ${
+                  highContrast
+                    ? 'bg-yellow-400 text-black'
+                    : 'bg-blue-600 text-white hover:bg-blue-500'
+                }`}
+              >
+                Sim, usar este e-mail
+              </button>
+              <button
+                onClick={handleCancelDbCheck}
+                className={`w-full py-3.5 rounded-xl font-semibold transition-all active:scale-95 ${
+                  highContrast
+                    ? 'border-2 border-yellow-400 bg-black text-yellow-300'
+                    : 'bg-white/10 text-white hover:bg-white/15'
+                }`}
+              >
+                Não, usar outro e-mail
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-16 flex justify-between w-full text-xs font-bold text-slate-600 border-t border-slate-800 pt-8">
-        <button onClick={() => onSelectRole('GESTOR')} className="hover:text-blue-400 uppercase tracking-widest">Área do Gestor</button>
+        <button 
+            onClick={() => {
+                if (!currentUser) {
+                    setShowLoginRequired(true);
+                } else {
+                    onSelectRole('GESTOR');
+                }
+            }} 
+            className="hover:text-blue-400 uppercase tracking-widest"
+        >
+            Área do Gestor
+        </button>
         {savedUser && <button onClick={handleClearData} className="hover:text-red-500 uppercase tracking-widest">Limpar Dados</button>}
       </div>
     </div>
