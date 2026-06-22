@@ -142,8 +142,8 @@ const PrePilotSurvey: React.FC<PrePilotSurveyProps> = ({ onComplete, onBack }) =
     try {
       const emailLower = user.email.toLowerCase();
 
-      // 1. Salva na coleção pilotSurveys com dados prévios
-      await setDoc(doc(db, 'pilotSurveys', emailLower), {
+      // Salva localmente em caso de offline
+      localStorage.setItem(`pilotSurveys_${emailLower}`, JSON.stringify({
         email: emailLower,
         pre_experienceTime: answers.pre_experienceTime,
         pre_formalCapacitation: answers.pre_formalCapacitation,
@@ -152,31 +152,61 @@ const PrePilotSurvey: React.FC<PrePilotSurveyProps> = ({ onComplete, onBack }) =
         pre_confidenceBasic: Number(answers.pre_confidenceBasic),
         pre_interestCustomTool: Number(answers.pre_interestCustomTool),
         timestampPre: new Date().toISOString(),
-      }, { merge: true });
+      }));
 
-      // 2. Atualiza dados do usuário para status correspondente 'ativo'
-      await setDoc(doc(db, 'users', emailLower), {
-        pilotStatus: 'ativo',
-        status: 'ativo',
-        email: emailLower,
-        name: user.displayName || emailLower.split('@')[0],
-      }, { merge: true });
+      try {
+        // 1. Salva na coleção pilotSurveys com dados prévios
+        await setDoc(doc(db, 'pilotSurveys', emailLower), {
+          email: emailLower,
+          pre_experienceTime: answers.pre_experienceTime,
+          pre_formalCapacitation: answers.pre_formalCapacitation,
+          pre_generalKnowledge: Number(answers.pre_generalKnowledge),
+          pre_prepKnowledge: Number(answers.pre_prepKnowledge),
+          pre_confidenceBasic: Number(answers.pre_confidenceBasic),
+          pre_interestCustomTool: Number(answers.pre_interestCustomTool),
+          timestampPre: new Date().toISOString(),
+        }, { merge: true });
 
-      // 3. Atualiza também localmente o progresso se houver
+        // 2. Atualiza dados do usuário para status correspondente 'ativo'
+        await setDoc(doc(db, 'users', emailLower), {
+          pilotStatus: 'ativo',
+          status: 'ativo',
+          email: emailLower,
+          name: user.displayName || emailLower.split('@')[0],
+        }, { merge: true });
+        
+        console.log("Salvo no Firestore com sucesso.");
+      } catch (dbErr: any) {
+        const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
+        if (isOffline) {
+          console.log("Firestore está offline. Respostas de pré-piloto salvas no cache local.");
+        } else {
+          throw dbErr;
+        }
+      }
+
+      // 3. Sincroniza o progresso local de status
       const localProgress = localStorage.getItem('alice_progress_v3') || '{}';
       try {
         const parsed = JSON.parse(localProgress);
         parsed.pilotStatus = 'ativo';
         parsed.status = 'ativo';
         localStorage.setItem('alice_progress_v3', JSON.stringify(parsed));
+        localStorage.setItem(`alice_progress_v3_${emailLower}`, JSON.stringify(parsed));
       } catch (err) {
-        console.error("Erro ao salvar progresso local:", err);
+        console.warn("Erro ao salvar progresso local:", err);
       }
 
       onComplete();
     } catch (err: any) {
-      console.error("Erro ao salvar questionário de pré-piloto:", err);
-      setErrorMsg('Ocorreu um erro ao salvar suas respostas. Por favor, tente novamente.');
+      const isOffline = err instanceof Error && err.message.toLowerCase().includes('offline');
+      if (isOffline) {
+        console.log("Erro de rede offline capturado durante salvamento do pré-piloto.");
+        onComplete();
+      } else {
+         console.error("Erro ao salvar questionário de pré-piloto:", err);
+         setErrorMsg('Ocorreu um erro ao salvar suas respostas. Por favor, tente novamente.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -277,14 +307,24 @@ const PrePilotSurvey: React.FC<PrePilotSurveyProps> = ({ onComplete, onBack }) =
   return (
     <div className="h-full w-full max-w-md mx-auto flex flex-col justify-center py-6 px-4 animate-in fade-in duration-500">
       
-      {/* Botão de Cancelar/Voltar */}
-      <div className="mb-4 text-left">
+      {/* Botão de Cancelar/Voltar e Pular */}
+      <div className="mb-4 flex justify-between items-center">
         <button
           onClick={handlePrev}
           className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-white transition-colors uppercase tracking-wider"
         >
           <ArrowLeft className="w-4 h-4" />
           Voltar
+        </button>
+        <button
+          onClick={onComplete}
+          className={`text-xs font-bold transition-all px-3 py-1.5 rounded-xl border flex items-center gap-1 ${
+            highContrast 
+              ? 'border-yellow-400 text-yellow-300 hover:bg-yellow-400 hover:text-black' 
+              : 'border-white/10 text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          Pular Questionário →
         </button>
       </div>
 

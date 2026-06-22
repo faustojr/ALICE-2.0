@@ -7,11 +7,22 @@ import firebaseConfig from './firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 
 // Initialize Firestore with the specific database ID from config
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
 
 // Initialize Auth
 const baseAuth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/drive');
+googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
+googleProvider.addScope('https://www.googleapis.com/auth/tasks');
+googleProvider.addScope('https://www.googleapis.com/auth/calendar');
+
+let cachedAccessToken: string | null = null;
+
+export const getAccessToken = () => cachedAccessToken;
+export const setAccessToken = (token: string | null) => {
+  cachedAccessToken = token;
+};
 
 let emulatedUser: any = null;
 
@@ -86,6 +97,7 @@ export const onAuthStateChanged = (authInstance: any, callback: (user: any) => v
 
 export const signOut = async (authInstance: any) => {
   setEmulatedUser(null);
+  setAccessToken(null);
   return baseSignOut(baseAuth);
 };
 
@@ -93,6 +105,10 @@ export const signInWithPopup = async (authInstance: any, provider: any) => {
   const result = await baseSignInWithPopup(baseAuth, provider);
   if (result.user && result.user.email) {
     setEmulatedUser(result.user.email);
+  }
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (credential?.accessToken) {
+    setAccessToken(credential.accessToken);
   }
   return result;
 };
@@ -104,7 +120,7 @@ async function testConnection() {
     console.log("Firebase connection successful");
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. The client is offline.");
+      console.log("Firebase connection test: Offline mode or sandboxed iframe preview environment. Local simulation fallback enabled.");
     }
   }
 }

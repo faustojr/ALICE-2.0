@@ -5,7 +5,8 @@ import RoleSelector from './components/RoleSelector';
 import Dashboard from './components/Dashboard';
 import MicrolearningFeed from './components/MicrolearningFeed';
 import PrePilotSurvey from './components/PrePilotSurvey';
-import { Trophy } from 'lucide-react';
+import { Trophy, Sparkles } from 'lucide-react';
+import { GoogleWorkspaceWorkspace } from './components/GoogleWorkspaceWorkspace';
 import { auth, db, onAuthStateChanged } from './firebase';
 import { doc, getDoc } from 'firebase/firestore';
 
@@ -23,7 +24,7 @@ export const useAccessibility = () => useContext(AccessibilityContext);
 
 const App: React.FC = () => {
   const [role, setRole] = useState<UserRole | null>(null);
-  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY'>('MAIN');
+  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY' | 'GOOGLE_WORKSPACE'>('MAIN');
   const [selectedLevel, setSelectedLevel] = useState<'Básico' | 'Intermediário' | 'Especialista'>('Básico');
   const [resume, setResume] = useState(false);
   const [startSurvey, setStartSurvey] = useState(false);
@@ -42,15 +43,50 @@ const App: React.FC = () => {
       if (user) {
         try {
           const emailKey = user.email!.toLowerCase();
-          const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
-          const surveyDocSnapshot = await getDoc(surveyDocRef);
+          let surveyExists = false;
+          let data: any = null;
+
+          try {
+            const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
+            const surveyDocSnapshot = await getDoc(surveyDocRef);
+            if (surveyDocSnapshot.exists()) {
+              surveyExists = true;
+              data = surveyDocSnapshot.data();
+            }
+          } catch (dbErr: any) {
+            const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
+            if (isOffline) {
+              console.log("Firestore está offline ao verificar questionário pré-piloto. Verificando no localStorage.");
+              const cachedSurvey = localStorage.getItem(`pilotSurveys_${emailKey}`);
+              if (cachedSurvey) {
+                try {
+                  data = JSON.parse(cachedSurvey);
+                  surveyExists = true;
+                } catch (jsonErr) {}
+              } else {
+                // Se não há cache, mas estamos offline no piloto, podemos verificar se salvamos status ativo de outras formas
+                const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`) || localStorage.getItem('alice_progress_v3');
+                if (activeProgress) {
+                  try {
+                    const parsed = JSON.parse(activeProgress);
+                    if (parsed.status === 'ativo' || parsed.pilotStatus === 'ativo' || parsed.pilotStatus === 'completed') {
+                      surveyExists = true;
+                      data = { pre_generalKnowledge: 5 }; // Mock data para o check passar offline
+                    }
+                  } catch (jsonErr) {}
+                }
+              }
+            } else {
+              throw dbErr;
+            }
+          }
           
-          if (surveyDocSnapshot.exists()) {
-            const data = surveyDocSnapshot.data();
+          if (surveyExists) {
             if (data && (
               data.pre_generalKnowledge !== undefined || 
               data.pre_tempoAtuacao !== undefined || 
-              data.pre_experienceTime !== undefined
+              data.pre_experienceTime !== undefined ||
+              data.email !== undefined
             )) {
               setHasPreSurveyCompleted(true);
             } else {
@@ -60,8 +96,14 @@ const App: React.FC = () => {
             setHasPreSurveyCompleted(false);
           }
         } catch (err) {
-          console.error("Erro ao verificar questionário pré-piloto no App:", err);
-          setHasPreSurveyCompleted(true); // Fallback seguro
+          const isOffline = err instanceof Error && err.message.toLowerCase().includes('offline');
+          if (isOffline) {
+            console.log("Firestore offline durante a validação do pré-piloto. Ativando fallback.");
+            setHasPreSurveyCompleted(true);
+          } else {
+            console.error("Erro ao verificar questionário pré-piloto no App:", err);
+            setHasPreSurveyCompleted(true); // Fallback seguro
+          }
         }
       } else {
         setHasPreSurveyCompleted(null);
@@ -96,7 +138,7 @@ const App: React.FC = () => {
 
   const handleLevelSelect = (level: 'Básico' | 'Intermediário' | 'Especialista') => {
     setSelectedLevel(level);
-    setView('MAIN');
+    setView('REELS');
   };
 
   const handleBack = async () => {
@@ -209,6 +251,26 @@ const App: React.FC = () => {
       );
     }
 
+    if (view === 'GOOGLE_WORKSPACE') {
+      const defaultUserState = {
+        currentLevel: selectedLevel,
+        currentModuleIndex: 0,
+        currentSlideIndex: 0,
+        completedQuizzes: [],
+        quizCount: 0,
+        correctQuizzesCount: { Básico: 0, Intermediário: 0, Especialista: 0 },
+        points: 0,
+        level: 1,
+        feedbackNeeded: false
+      };
+      return (
+        <GoogleWorkspaceWorkspace 
+          onBack={handleBack} 
+          userState={defaultUserState} 
+        />
+      );
+    }
+
     return (
       <div className="flex flex-col gap-6 items-center justify-center h-full max-w-md mx-auto">
         <div className="text-center mb-8">
@@ -227,6 +289,24 @@ const App: React.FC = () => {
           </div>
           <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-40 transition-opacity">
             <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M10 15l5.19-3L10 9v6zM21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9-2 2-2h14c0 1.1.9-2 2-2zM5 19V5h14v14H5z"/></svg>
+          </div>
+        </button>
+
+        <button 
+          onClick={() => setView('GOOGLE_WORKSPACE')}
+          className="w-full group relative overflow-hidden bg-gradient-to-br from-indigo-600 to-blue-800 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95 border border-indigo-500/30"
+        >
+          <div className="relative z-10 flex flex-col items-start text-left">
+            <span className="text-xs font-bold uppercase tracking-widest text-white/60 mb-2 flex items-center gap-1.5 animate-pulse">
+              INTEGRAÇÃO GOOGLE WORKSPACE <Sparkles className="w-3 h-3 text-cyan-300" />
+            </span>
+            <h2 className="text-2xl font-bold text-white mb-1">Ferramentas de Estudo</h2>
+            <p className="text-white/70 text-sm">Agenda, Planilhas, PDFs e Lembretes Integrados</p>
+          </div>
+          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-45 transition-opacity">
+            <svg className="w-20 h-20 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.053.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75z" />
+            </svg>
           </div>
         </button>
 

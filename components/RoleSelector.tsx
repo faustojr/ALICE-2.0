@@ -47,7 +47,20 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
             }
           }
         } catch (e) {
-          console.error("Erro ao buscar usuário do Firestore:", e);
+          const isOffline = e instanceof Error && e.message.toLowerCase().includes('offline');
+          if (isOffline) {
+            console.log("Firestore está offline ao buscar usuário. Usando cache local do localStorage.");
+            // Fallback para localStorage para manter offline funcional
+            const emailKey = user.email!.toLowerCase();
+            const savedV3 = localStorage.getItem(`alice_progress_v3_${emailKey}`);
+            if (savedV3) {
+              setSavedUser(JSON.parse(savedV3));
+            } else {
+              setSavedUser(null);
+            }
+          } else {
+            console.error("Erro ao buscar usuário do Firestore:", e);
+          }
         } finally {
           setIsFetchingUser(false);
         }
@@ -321,6 +334,23 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
           </form>
         )}
 
+        {loginStep === 'input' && (
+          <div className="pt-2 text-center animate-in fade-in duration-300">
+            <button
+              type="button"
+              onClick={() => {
+                setEmulatedUser("visitante@prefeitura.gov.br");
+              }}
+              className={`text-xs font-semibold tracking-wider uppercase transition-all duration-200 hover:scale-102 flex items-center justify-center gap-1.5 mx-auto ${
+                highContrast ? 'text-yellow-400 hover:text-white underline' : 'text-slate-400 hover:text-blue-400 underline underline-offset-4'
+              }`}
+            >
+              <SparklesIcon className="w-3.5 h-3.5" />
+              Experimentar como Visitante (Acesso Rápido)
+            </button>
+          </div>
+        )}
+
         {loginStep === 'confirm' && (
           <div className={`p-6 border rounded-3xl text-center space-y-4 ${
             highContrast ? 'border-yellow-400 bg-black' : 'bg-white/5 border-white/10'
@@ -400,11 +430,7 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
       <div className="mt-16 flex justify-between w-full text-xs font-bold text-slate-600 border-t border-slate-800 pt-8">
         <button 
             onClick={() => {
-                if (!currentUser) {
-                    setShowLoginRequired(true);
-                } else {
-                    onSelectRole('GESTOR');
-                }
+                onSelectRole('GESTOR');
             }} 
             className="hover:text-blue-400 uppercase tracking-widest"
         >

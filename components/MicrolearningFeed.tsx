@@ -171,8 +171,14 @@ const MicrolearningFeed: React.FC<{
       }
 
       setSurveySuccess(true);
-    } catch (err) {
-      console.error("Erro ao salvar pesquisa de pós-uso:", err);
+    } catch (err: any) {
+      const isOffline = err instanceof Error && err.message.toLowerCase().includes('offline');
+      if (isOffline) {
+        console.log("Firestore está offline. Pesquisa de pós-uso salva apenas localmente.");
+        setSurveySuccess(true);
+      } else {
+        console.error("Erro ao salvar pesquisa de pós-uso:", err);
+      }
     } finally {
       setSubmittingSurvey(false);
     }
@@ -212,7 +218,12 @@ const MicrolearningFeed: React.FC<{
             });
           }
         } catch (err) {
-          console.error("Erro ao carregar progresso remoto ao montar:", err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.toLowerCase().includes('offline')) {
+            console.log("Firestore está offline. Usando cache local do localStorage para progresso remoto.");
+          } else {
+            console.error("Erro ao carregar progresso remoto ao montar:", err);
+          }
         }
       }
     };
@@ -256,7 +267,12 @@ const MicrolearningFeed: React.FC<{
             lastAccess: new Date().toISOString()
           }, { merge: true });
         } catch (e) {
-          console.error("Erro ao sincronizar com Firestore:", e);
+          const errMsg = e instanceof Error ? e.message : String(e);
+          if (errMsg.toLowerCase().includes('offline')) {
+            console.log("Firestore está offline. Sincronização em cache local.");
+          } else {
+            console.error("Erro ao sincronizar com Firestore:", e);
+          }
         }
       }
     };

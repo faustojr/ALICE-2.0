@@ -1,4 +1,5 @@
 import { ModuleContent, Slide } from '../types';
+import { auth } from '../firebase';
 
 async function generateImageForSlide(promptText: string): Promise<string> {
     // Generate a reliable Unsplash image based on the prompt keywords
@@ -313,7 +314,13 @@ export async function generateReelsModule(
         const response = await fetch('/api/generateModule', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ trail, index, level, failCount })
+            body: JSON.stringify({ 
+                trail, 
+                index, 
+                level, 
+                failCount, 
+                email: auth.currentUser?.email || undefined 
+            })
         });
         
         if (!response.ok) {

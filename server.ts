@@ -34,12 +34,58 @@ async function startServer() {
     }
   };
 
+  // In-memory store for Gemini API limits per user
+  const geminiLimits: Record<string, { count: number; windowStart: number }> = {};
+  const LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+  const MAX_GENERATIONS_PER_WINDOW = 20; // max 20 generations per 15 minutes
+
   // API Routes
   app.post("/api/generateModule", async (req, res) => {
     try {
-      const { trail, index, level, failCount } = req.body;
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY não configurada');
+      }
+
+      const { trail, index, level, failCount, email } = req.body;
+
+      // Validação básica dos parâmetros recebidos
+      if (!trail) {
+        return res.status(400).json({ error: "Trilha não informada." });
+      }
+      if (index === undefined) {
+        return res.status(400).json({ error: "Index não informado." });
+      }
+      if (!level) {
+        return res.status(400).json({ error: "Nível não informado." });
+      }
+
+      // Identificar o usuário por email ou por IP
+      const userIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+      const userKey = (email ? email.trim().toLowerCase() : userIp?.toString()) || 'anonymous';
+
+      const now = Date.now();
+      if (!geminiLimits[userKey]) {
+        geminiLimits[userKey] = { count: 0, windowStart: now };
+      }
+
+      const userLimit = geminiLimits[userKey];
+      if (now - userLimit.windowStart > LIMIT_WINDOW_MS) {
+        // Reiniciar a janela se o tempo passou
+        userLimit.count = 1;
+        userLimit.windowStart = now;
+      } else {
+        userLimit.count += 1;
+        if (userLimit.count > MAX_GENERATIONS_PER_WINDOW) {
+          const timeLeft = Math.ceil((LIMIT_WINDOW_MS - (now - userLimit.windowStart)) / 1000 / 60);
+          return res.status(429).json({ 
+            error: `Limite de geração de módulos atingido. Aguarde ${timeLeft} minutos para novas gerações.` 
+          });
+        }
+      }
+
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       
       const LAW_14133_TOPICS = [
           "Âmbito de Aplicação e Princípios (Arts. 1º a 7º)",
