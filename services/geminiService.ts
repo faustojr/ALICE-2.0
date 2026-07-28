@@ -294,6 +294,49 @@ const FALLBACK_CONTENT: Record<number, FallbackEntry> = {
     }
 };
 
+function getStandardModuleContent(
+    index: number, 
+    level: 'Básico' | 'Intermediário' | 'Especialista'
+): ModuleContent {
+    const topicIndex = index % LAW_14133_TOPICS.length;
+    const topic = LAW_14133_TOPICS[topicIndex];
+    const cleanTopic = cleanTopicName(topic);
+    
+    const entry = FALLBACK_CONTENT[topicIndex] || FALLBACK_CONTENT[0];
+    
+    const fallbackImages = [0, 1, 2].map((slideIndex) => {
+        const imgId = FALLBACK_IMAGE_POOLS[(topicIndex * 3 + slideIndex) % FALLBACK_IMAGE_POOLS.length];
+        return `https://images.unsplash.com/${imgId}?q=80&w=600&t=${(index + 1) * (slideIndex + 1)}`;
+    });
+
+    const levelText = level === 'Especialista' ? 'Especialista' : level === 'Intermediário' ? 'Intermediário' : 'Básico';
+
+    const slides: Slide[] = [
+        { 
+            text: `Módulo #${index + 1} [${levelText}]: ${entry.intro}`, 
+            imageUrl: fallbackImages[0] 
+        },
+        { 
+            text: `Na Lei 14.133, o tema "${cleanTopic}" é essencial para evitar riscos e otimizar as compras do município.`, 
+            imageUrl: fallbackImages[1] 
+        },
+        { 
+            text: `Dica ALICE: Revise os principais pontos do Artigo correspondente antes de responder ao quiz de fixação.`, 
+            imageUrl: fallbackImages[2] 
+        }
+    ];
+
+    return {
+        title: `${cleanTopic}`,
+        slides,
+        question: entry.question,
+        options: entry.options,
+        feedbackCorrect: entry.feedbackCorrect,
+        feedbackWrong: entry.feedbackWrong,
+        variationId: `standard_${level}_${index}`
+    };
+}
+
 export async function generateReelsModule(
     trail: string, 
     index: number, 
@@ -303,7 +346,13 @@ export async function generateReelsModule(
 ): Promise<ModuleContent> {
     const cacheKey = `${trail}_${level}_${index}`;
 
-    // Check if we have it in cache first. Use it for prefetches OR if it's already there (so users benefit from prefetching!)
+    // Otmização de IA: primeira tentativa (failCount === 0) usa a trilha padrão, R$ 0 de custo
+    if (failCount === 0) {
+        console.log("Serving standard pre-defined module for first attempt:", cacheKey);
+        return getStandardModuleContent(index, level);
+    }
+
+    // Check if we have it in cache first (apenas para tentativas de reestudo já geradas)
     const cachedContent = getValidCacheContent(cacheKey, failCount);
     if (cachedContent) {
         console.log("Serving from cache:", cacheKey);
@@ -353,33 +402,25 @@ export async function generateReelsModule(
         // Store in cache for future offline use
         setCache(cacheKey, content);
 
-        // Pre-fetch next 2 modules in background if this is the main call and no failure
+        // Pre-fetch only the next 1 module in background to optimize costs (reduces unused API calls by 50%)
         if (!isPrefetch && failCount === 0 && navigator.onLine) {
             const prefetch = () => {
                 const nextIndex = index + 1;
                 const key1 = `${trail}_${level}_${nextIndex}`;
-                const key2 = `${trail}_${level}_${nextIndex + 1}`;
                 
-                // Only prefetch if we don't already have valid cache for them
+                // Only prefetch the next single module if it is not already in cache
                 if (!getValidCacheContent(key1, 0)) {
                     generateReelsModule(trail, nextIndex, level, true).catch(() => {});
                 }
-                
-                // Stagger the second prefetch even further
-                setTimeout(() => {
-                    if (navigator.onLine && !getValidCacheContent(key2, 0)) {
-                        generateReelsModule(trail, nextIndex + 1, level, true).catch(() => {});
-                    }
-                }, 5000);
             };
 
-            // Use requestIdleCallback if available, otherwise a safe timeout
+            // Use requestIdleCallback if available, with a safer 8-second delay
             if ('requestIdleCallback' in window) {
                 (window as any).requestIdleCallback(() => {
-                    setTimeout(prefetch, 5000);
-                }, { timeout: 10000 });
+                    setTimeout(prefetch, 8000);
+                }, { timeout: 15000 });
             } else {
-                setTimeout(prefetch, 5000);
+                setTimeout(prefetch, 8000);
             }
         }
 

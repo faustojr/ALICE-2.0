@@ -78,4 +78,5 @@ export interface UserState {
   lastFeedbackScore?: 'positivo' | 'neutro' | 'negativo';
   lastStudyDate?: string | null;
   streakDays?: number;
+  hasTestedReels?: boolean;
 }

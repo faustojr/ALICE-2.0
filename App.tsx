@@ -5,8 +5,7 @@ import RoleSelector from './components/RoleSelector';
 import Dashboard from './components/Dashboard';
 import MicrolearningFeed from './components/MicrolearningFeed';
 import PrePilotSurvey from './components/PrePilotSurvey';
-import { Trophy, Sparkles } from 'lucide-react';
-import { GoogleWorkspaceWorkspace } from './components/GoogleWorkspaceWorkspace';
+import { Trophy, Sparkles, ClipboardList, CheckCircle } from 'lucide-react';
 import { auth, db, onAuthStateChanged } from './firebase';
 import { doc, getDoc } from 'firebase/firestore';
 
@@ -24,7 +23,7 @@ export const useAccessibility = () => useContext(AccessibilityContext);
 
 const App: React.FC = () => {
   const [role, setRole] = useState<UserRole | null>(null);
-  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY' | 'GOOGLE_WORKSPACE'>('MAIN');
+  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY'>('MAIN');
   const [selectedLevel, setSelectedLevel] = useState<'Básico' | 'Intermediário' | 'Especialista'>('Básico');
   const [resume, setResume] = useState(false);
   const [startSurvey, setStartSurvey] = useState(false);
@@ -36,82 +35,116 @@ const App: React.FC = () => {
 
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [hasPreSurveyCompleted, setHasPreSurveyCompleted] = useState<boolean | null>(null);
+  const [hasPostSurveyCompleted, setHasPostSurveyCompleted] = useState<boolean | null>(null);
+  const [hasTestedReels, setHasTestedReels] = useState<boolean>(false);
+
+  const checkSurveysStatus = async (user: any) => {
+    if (!user || !user.email) return;
+    try {
+      const emailKey = user.email.toLowerCase();
+      let surveyExists = false;
+      let data: any = null;
+
+      try {
+        const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
+        const surveyDocSnapshot = await getDoc(surveyDocRef);
+        if (surveyDocSnapshot.exists()) {
+          surveyExists = true;
+          data = surveyDocSnapshot.data();
+        }
+      } catch (dbErr: any) {
+        const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
+        if (isOffline) {
+          console.log("Firestore está offline ao verificar questionário. Verificando no localStorage.");
+          const cachedSurvey = localStorage.getItem(`pilotSurveys_${emailKey}`);
+          if (cachedSurvey) {
+            try {
+              data = JSON.parse(cachedSurvey);
+              surveyExists = true;
+            } catch (jsonErr) {}
+          } else {
+            // Se não há cache, mas estamos offline no piloto, podemos verificar se salvamos status de outras formas
+            const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`);
+            if (activeProgress) {
+              try {
+                const parsed = JSON.parse(activeProgress);
+                if (parsed.status === 'ativo' || parsed.pilotStatus === 'ativo' || parsed.pilotStatus === 'completed') {
+                  surveyExists = true;
+                  data = { 
+                    pre_generalKnowledge: 5,
+                    ...(parsed.pilotStatus === 'completed' ? { pos_daysUsed: 5 } : {})
+                  };
+                }
+              } catch (jsonErr) {}
+            }
+          }
+        } else {
+          console.warn("Erro ao ler documento de pesquisa do Firestore:", dbErr);
+        }
+      }
+      
+      if (surveyExists && data) {
+        // Validação da Pesquisa Pré-Uso
+        const preCompleted = (
+          data.pre_generalKnowledge !== undefined || 
+          data.pre_tempoAtuacao !== undefined || 
+          data.pre_experienceTime !== undefined ||
+          data.timestampPre !== undefined
+        );
+        setHasPreSurveyCompleted(preCompleted);
+
+        // Validação da Pesquisa de Pós-Uso / Encerramento
+        const postCompleted = (
+          data.pos_daysUsed !== undefined ||
+          data.pos_generalKnowledge !== undefined ||
+          data.timestamp !== undefined
+        );
+        setHasPostSurveyCompleted(postCompleted);
+      } else {
+        setHasPreSurveyCompleted(false);
+        setHasPostSurveyCompleted(false);
+      }
+
+      // Verificar se testou os reels e respondeu um quiz
+      let tested = false;
+      const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`);
+      if (activeProgress) {
+        try {
+          const parsed = JSON.parse(activeProgress);
+          if (parsed.hasTestedReels || parsed.quizCount > 0 || parsed.points > 1250 || (parsed.completedQuizzes && parsed.completedQuizzes.length > 0)) {
+            tested = true;
+          }
+        } catch (jsonErr) {}
+      }
+      setHasTestedReels(tested);
+    } catch (err) {
+      console.error("Erro geral ao verificar questionários no App:", err);
+      // Fallback seguro de permissão / sandbox: deixa ativo para o usuário poder responder
+      setHasPreSurveyCompleted(false);
+      setHasPostSurveyCompleted(false);
+      setHasTestedReels(false);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user || null);
       if (user) {
-        try {
-          const emailKey = user.email!.toLowerCase();
-          let surveyExists = false;
-          let data: any = null;
-
-          try {
-            const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
-            const surveyDocSnapshot = await getDoc(surveyDocRef);
-            if (surveyDocSnapshot.exists()) {
-              surveyExists = true;
-              data = surveyDocSnapshot.data();
-            }
-          } catch (dbErr: any) {
-            const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
-            if (isOffline) {
-              console.log("Firestore está offline ao verificar questionário pré-piloto. Verificando no localStorage.");
-              const cachedSurvey = localStorage.getItem(`pilotSurveys_${emailKey}`);
-              if (cachedSurvey) {
-                try {
-                  data = JSON.parse(cachedSurvey);
-                  surveyExists = true;
-                } catch (jsonErr) {}
-              } else {
-                // Se não há cache, mas estamos offline no piloto, podemos verificar se salvamos status ativo de outras formas
-                const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`) || localStorage.getItem('alice_progress_v3');
-                if (activeProgress) {
-                  try {
-                    const parsed = JSON.parse(activeProgress);
-                    if (parsed.status === 'ativo' || parsed.pilotStatus === 'ativo' || parsed.pilotStatus === 'completed') {
-                      surveyExists = true;
-                      data = { pre_generalKnowledge: 5 }; // Mock data para o check passar offline
-                    }
-                  } catch (jsonErr) {}
-                }
-              }
-            } else {
-              throw dbErr;
-            }
-          }
-          
-          if (surveyExists) {
-            if (data && (
-              data.pre_generalKnowledge !== undefined || 
-              data.pre_tempoAtuacao !== undefined || 
-              data.pre_experienceTime !== undefined ||
-              data.email !== undefined
-            )) {
-              setHasPreSurveyCompleted(true);
-            } else {
-              setHasPreSurveyCompleted(false);
-            }
-          } else {
-            setHasPreSurveyCompleted(false);
-          }
-        } catch (err) {
-          const isOffline = err instanceof Error && err.message.toLowerCase().includes('offline');
-          if (isOffline) {
-            console.log("Firestore offline durante a validação do pré-piloto. Ativando fallback.");
-            setHasPreSurveyCompleted(true);
-          } else {
-            console.error("Erro ao verificar questionário pré-piloto no App:", err);
-            setHasPreSurveyCompleted(true); // Fallback seguro
-          }
-        }
+        await checkSurveysStatus(user);
       } else {
         setHasPreSurveyCompleted(null);
+        setHasPostSurveyCompleted(null);
       }
     });
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (view === 'MAIN' && currentUser) {
+      checkSurveysStatus(currentUser);
+    }
+  }, [view, currentUser]);
 
   const handleRoleSelect = (
     selectedRole: UserRole, 
@@ -121,17 +154,9 @@ const App: React.FC = () => {
     setRole(selectedRole);
     setResume(shouldResume);
     if (selectedRole === 'ALUNO') {
-      if (hasPreSurveyCompleted === false) {
-        setView('MAIN'); // renderContent irá interceptar e mandar para o questionário
-      } else {
-        if (shouldResume) {
-          if (savedLevel) {
-            setSelectedLevel(savedLevel);
-          }
-          setView('REELS');
-        } else {
-          setView('LEVEL_SELECT');
-        }
+      setView('MAIN');
+      if (shouldResume && savedLevel) {
+        setSelectedLevel(savedLevel);
       }
     }
   };
@@ -177,7 +202,7 @@ const App: React.FC = () => {
       return <Dashboard onBack={handleBack} />;
     }
 
-    if (role === 'ALUNO' && hasPreSurveyCompleted === null) {
+    if (role === 'ALUNO' && (hasPreSurveyCompleted === null || hasPostSurveyCompleted === null)) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
           <div className="relative w-16 h-16 mb-4">
@@ -188,21 +213,15 @@ const App: React.FC = () => {
       );
     }
 
-    if (role === 'ALUNO' && hasPreSurveyCompleted === false) {
+    if (view === 'PRE_SURVEY') {
       return (
         <PrePilotSurvey 
           onComplete={() => {
             setHasPreSurveyCompleted(true);
             setView('LEVEL_SELECT');
           }}
-          onBack={async () => {
-            setRole(null);
+          onBack={() => {
             setView('MAIN');
-            try {
-              await auth.signOut();
-            } catch (err) {
-              console.error("Erro ao sair no questionário:", err);
-            }
           }}
         />
       );
@@ -251,26 +270,6 @@ const App: React.FC = () => {
       );
     }
 
-    if (view === 'GOOGLE_WORKSPACE') {
-      const defaultUserState = {
-        currentLevel: selectedLevel,
-        currentModuleIndex: 0,
-        currentSlideIndex: 0,
-        completedQuizzes: [],
-        quizCount: 0,
-        correctQuizzesCount: { Básico: 0, Intermediário: 0, Especialista: 0 },
-        points: 0,
-        level: 1,
-        feedbackNeeded: false
-      };
-      return (
-        <GoogleWorkspaceWorkspace 
-          onBack={handleBack} 
-          userState={defaultUserState} 
-        />
-      );
-    }
-
     return (
       <div className="flex flex-col gap-6 items-center justify-center h-full max-w-md mx-auto">
         <div className="text-center mb-8">
@@ -279,54 +278,145 @@ const App: React.FC = () => {
         </div>
 
         <button 
-          onClick={() => setView('REELS')}
-          className="w-full group relative overflow-hidden bg-gradient-to-br from-purple-600 to-blue-700 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95"
+          onClick={() => {
+            if (!hasPreSurveyCompleted) {
+              setView('PRE_SURVEY');
+            }
+          }}
+          disabled={!!hasPreSurveyCompleted}
+          className={`w-full group relative overflow-hidden p-8 rounded-3xl shadow-xl transition-all ${
+            hasPreSurveyCompleted
+              ? highContrast
+                ? 'bg-black border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
+                : 'bg-slate-900/40 border border-white/5 text-slate-500 cursor-not-allowed opacity-50 saturate-50'
+              : highContrast
+                ? 'bg-black border-yellow-400 text-yellow-300 hover:bg-yellow-400 hover:text-black cursor-pointer active:scale-95 hover:scale-[1.02]'
+                : 'bg-gradient-to-br from-blue-600 to-emerald-600 border border-blue-500/30 text-white cursor-pointer active:scale-95 hover:scale-[1.02]'
+          }`}
+          id="btn-pre-survey"
         >
           <div className="relative z-10 flex flex-col items-start text-left">
-            <span className="text-xs font-bold uppercase tracking-widest text-white/60 mb-2">Novo Formato</span>
-            <h2 className="text-2xl font-bold text-white mb-1">Reels de Conhecimento</h2>
-            <p className="text-white/70 text-sm">Aprenda com pílulas rápidas e dinâmicas</p>
+            <span className={`text-xs font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5 ${
+              hasPreSurveyCompleted 
+                ? 'text-slate-500' 
+                : 'text-white/60'
+            }`}>
+              {hasPreSurveyCompleted ? 'Concluído' : 'Passo 1: Diagnóstico'}
+              {hasPreSurveyCompleted ? (
+                <CheckCircle className={`w-3.5 h-3.5 ${highContrast ? 'text-slate-500' : 'text-emerald-500'}`} />
+              ) : (
+                <ClipboardList className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+              )}
+            </span>
+            <h2 className={`text-2xl font-bold mb-1 ${hasPreSurveyCompleted ? 'text-slate-500' : 'text-white'}`}>
+              Pesquisa Pré-Uso
+            </h2>
+            <p className={`${hasPreSurveyCompleted ? 'text-slate-600' : 'text-white/70'} text-sm`}>
+              {hasPreSurveyCompleted 
+                ? 'Obrigado! Seu diagnóstico inicial de pré-piloto já foi respondido.' 
+                : 'Responda antes de iniciar seus estudos para registrar seus resultados.'}
+            </p>
           </div>
-          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-40 transition-opacity">
-            <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M10 15l5.19-3L10 9v6zM21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9-2 2-2h14c0 1.1.9-2 2-2zM5 19V5h14v14H5z"/></svg>
+          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-15 group-hover:opacity-30 transition-opacity">
+            {hasPreSurveyCompleted ? (
+              <CheckCircle className="w-20 h-20 text-slate-600" />
+            ) : (
+              <ClipboardList className="w-20 h-20 text-white" />
+            )}
           </div>
         </button>
 
         <button 
-          onClick={() => setView('GOOGLE_WORKSPACE')}
-          className="w-full group relative overflow-hidden bg-gradient-to-br from-indigo-600 to-blue-800 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95 border border-indigo-500/30"
+          onClick={() => {
+            if (hasPreSurveyCompleted) {
+              setView('LEVEL_SELECT');
+            }
+          }}
+          disabled={!hasPreSurveyCompleted}
+          className={`w-full group relative overflow-hidden p-8 rounded-3xl shadow-xl transition-all ${
+            !hasPreSurveyCompleted
+              ? highContrast
+                ? 'bg-black border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
+                : 'bg-slate-900/40 border border-white/5 text-slate-500 cursor-not-allowed opacity-50 saturate-50'
+              : highContrast
+                ? 'bg-black border-yellow-400 text-yellow-300 hover:bg-yellow-400 hover:text-black cursor-pointer active:scale-95 hover:scale-[1.02]'
+                : 'bg-gradient-to-br from-purple-600 to-blue-700 border border-purple-500/30 text-white cursor-pointer active:scale-95 hover:scale-[1.02]'
+          }`}
+          id="btn-reels-knowledge"
         >
           <div className="relative z-10 flex flex-col items-start text-left">
-            <span className="text-xs font-bold uppercase tracking-widest text-white/60 mb-2 flex items-center gap-1.5 animate-pulse">
-              INTEGRAÇÃO GOOGLE WORKSPACE <Sparkles className="w-3 h-3 text-cyan-300" />
+            <span className={`text-xs font-bold uppercase tracking-widest mb-2 ${!hasPreSurveyCompleted ? 'text-slate-500' : 'text-white/60'}`}>
+              {!hasPreSurveyCompleted ? 'Bloqueado' : 'Passo 2: Estudo'}
             </span>
-            <h2 className="text-2xl font-bold text-white mb-1">Ferramentas de Estudo</h2>
-            <p className="text-white/70 text-sm">Agenda, Planilhas, PDFs e Lembretes Integrados</p>
+            <h2 className={`text-2xl font-bold mb-1 ${!hasPreSurveyCompleted ? 'text-slate-500' : 'text-white'}`}>Reels de Conhecimento</h2>
+            <p className={`${!hasPreSurveyCompleted ? 'text-slate-600' : 'text-white/70'} text-sm`}>
+              {!hasPreSurveyCompleted 
+                ? 'Bloqueado: Faça primeiro a pesquisa pré-uso (Passo 1).' 
+                : 'Aprenda com pílulas rápidas e dinâmicas'}
+            </p>
           </div>
-          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-45 transition-opacity">
-            <svg className="w-20 h-20 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.053.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75z" />
+          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 group-hover:opacity-40 transition-opacity">
+            <svg className={`w-24 h-24 ${!hasPreSurveyCompleted ? 'text-slate-600' : 'text-white'}`} fill="currentColor" viewBox="0 0 24 24">
+              <path d="M10 15l5.19-3L10 9v6zM21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9-2 2-2h14c0 1.1.9-2 2-2zM5 19V5h14v14H5z"/>
             </svg>
           </div>
         </button>
 
         <button 
           onClick={() => {
-            setStartSurvey(true);
-            setView('REELS');
+            if (hasPreSurveyCompleted && hasTestedReels && !hasPostSurveyCompleted) {
+              setStartSurvey(true);
+              setView('REELS');
+            }
           }}
-          className="w-full group relative overflow-hidden bg-gradient-to-br from-emerald-600 to-teal-700 p-8 rounded-3xl shadow-xl hover:scale-[1.02] transition-all active:scale-95 border border-emerald-500/30"
+          disabled={!hasPreSurveyCompleted || !hasTestedReels || !!hasPostSurveyCompleted}
+          className={`w-full group relative overflow-hidden p-8 rounded-3xl shadow-xl transition-all ${
+            hasPostSurveyCompleted
+              ? highContrast
+                ? 'bg-black border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
+                : 'bg-slate-900/40 border border-white/5 text-slate-500 cursor-not-allowed opacity-50 saturate-50'
+              : (!hasPreSurveyCompleted || !hasTestedReels)
+                ? highContrast
+                  ? 'bg-black border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
+                  : 'bg-slate-900/40 border border-white/5 text-slate-500 cursor-not-allowed opacity-50 saturate-50'
+                : highContrast
+                  ? 'bg-black border-yellow-400 text-yellow-300 hover:bg-yellow-400 hover:text-black cursor-pointer active:scale-95 hover:scale-[1.02]'
+                  : 'bg-gradient-to-br from-emerald-600 to-teal-700 border border-emerald-500/30 text-white cursor-pointer active:scale-95 hover:scale-[1.02]'
+          }`}
           id="btn-direct-survey"
         >
           <div className="relative z-10 flex flex-col items-start text-left">
-            <span className="text-xs font-bold uppercase tracking-widest text-white/60 mb-2 flex items-center gap-1.5">
-              Avaliação do Piloto <Trophy className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+            <span className={`text-xs font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5 ${
+              hasPostSurveyCompleted 
+                ? 'text-slate-500' 
+                : 'text-white/60'
+            }`}>
+              {hasPostSurveyCompleted ? 'Concluído' : 'Passo 3: Avaliação do Piloto'}
+              {hasPostSurveyCompleted ? (
+                <CheckCircle className={`w-3.5 h-3.5 ${highContrast ? 'text-slate-500' : 'text-emerald-500'}`} />
+              ) : (
+                <Trophy className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+              )}
             </span>
-            <h2 className="text-2xl font-bold text-white mb-1">Encerrar e Responder Pesquisa</h2>
-            <p className="text-white/70 text-sm">Responda o questionário final de pós-uso</p>
+            <h2 className={`text-2xl font-bold mb-1 ${hasPostSurveyCompleted ? 'text-slate-500' : 'text-white'}`}>
+              Encerrar e Responder Pesquisa
+            </h2>
+            <p className={`${hasPostSurveyCompleted ? 'text-slate-600' : 'text-white/70'} text-sm`}>
+              {hasPostSurveyCompleted 
+                ? 'Obrigado! Seu questionário final de pós-uso já foi enviado com sucesso.' 
+                : !hasPreSurveyCompleted
+                  ? 'Bloqueado: Faça primeiro a pesquisa pré-uso (Passo 1).'
+                  : !hasTestedReels
+                    ? 'Bloqueado: Assista aos Reels e responda pelo menos 1 quiz para liberar a avaliação.'
+                    : 'Responda o questionário final de pós-uso ao encerrar o piloto.'}
+            </p>
           </div>
-          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-25 group-hover:opacity-45 transition-opacity">
-            <Trophy className="w-20 h-20 text-white" />
+          <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-15 group-hover:opacity-30 transition-opacity">
+            {hasPostSurveyCompleted ? (
+              <CheckCircle className="w-20 h-20 text-slate-600" />
+            ) : (
+              <Trophy className="w-20 h-20 text-white" />
+            )}
           </div>
         </button>
 

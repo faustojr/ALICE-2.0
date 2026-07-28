@@ -155,34 +155,41 @@ const PrePilotSurvey: React.FC<PrePilotSurveyProps> = ({ onComplete, onBack }) =
       }));
 
       try {
+        // Promessa de timeout de 2500ms para evitar travamento em redes lentas ou instáveis
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('timeout')), 2500)
+        );
+
         // 1. Salva na coleção pilotSurveys com dados prévios
-        await setDoc(doc(db, 'pilotSurveys', emailLower), {
-          email: emailLower,
-          pre_experienceTime: answers.pre_experienceTime,
-          pre_formalCapacitation: answers.pre_formalCapacitation,
-          pre_generalKnowledge: Number(answers.pre_generalKnowledge),
-          pre_prepKnowledge: Number(answers.pre_prepKnowledge),
-          pre_confidenceBasic: Number(answers.pre_confidenceBasic),
-          pre_interestCustomTool: Number(answers.pre_interestCustomTool),
-          timestampPre: new Date().toISOString(),
-        }, { merge: true });
+        await Promise.race([
+          setDoc(doc(db, 'pilotSurveys', emailLower), {
+            email: emailLower,
+            pre_experienceTime: answers.pre_experienceTime,
+            pre_formalCapacitation: answers.pre_formalCapacitation,
+            pre_generalKnowledge: Number(answers.pre_generalKnowledge),
+            pre_prepKnowledge: Number(answers.pre_prepKnowledge),
+            pre_confidenceBasic: Number(answers.pre_confidenceBasic),
+            pre_interestCustomTool: Number(answers.pre_interestCustomTool),
+            timestampPre: new Date().toISOString(),
+          }, { merge: true }),
+          timeoutPromise
+        ]);
 
         // 2. Atualiza dados do usuário para status correspondente 'ativo'
-        await setDoc(doc(db, 'users', emailLower), {
-          pilotStatus: 'ativo',
-          status: 'ativo',
-          email: emailLower,
-          name: user.displayName || emailLower.split('@')[0],
-        }, { merge: true });
+        await Promise.race([
+          setDoc(doc(db, 'users', emailLower), {
+            pilotStatus: 'ativo',
+            status: 'ativo',
+            email: emailLower,
+            name: user.displayName || emailLower.split('@')[0],
+          }, { merge: true }),
+          timeoutPromise
+        ]);
         
         console.log("Salvo no Firestore com sucesso.");
       } catch (dbErr: any) {
-        const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
-        if (isOffline) {
-          console.log("Firestore está offline. Respostas de pré-piloto salvas no cache local.");
-        } else {
-          throw dbErr;
-        }
+        console.warn("Lentidão ou falha de gravação no Firebase durante o pré-piloto. Salvando localmente de forma resiliente.");
+        console.error("Erro original do Firebase:", dbErr);
       }
 
       // 3. Sincroniza o progresso local de status

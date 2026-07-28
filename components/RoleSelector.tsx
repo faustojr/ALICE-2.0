@@ -297,9 +297,11 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
       </div>
 
       <div className="w-full space-y-5">
-        <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-2xl mb-6 text-left">
-            <p className="text-blue-200 text-sm leading-relaxed">
-                <strong className="text-white">Identificação Necessária:</strong> Para que seu progresso conte no <strong>Ranking da Prefeitura</strong>, você precisa iniciar com uma conta identificada.
+        <div className={`p-4 rounded-2xl mb-6 text-left border ${
+          highContrast ? 'border-yellow-400 bg-black' : 'bg-blue-900/20 border-blue-500/30'
+        }`}>
+            <p className={`text-sm leading-relaxed ${highContrast ? 'text-yellow-300' : 'text-blue-200'}`}>
+                <strong className="text-white">Identificação:</strong> Por favor, informe seu e-mail institucional ou pessoal para iniciar e registrar seu progresso e resultados de aprendizagem no piloto.
             </p>
         </div>
 
@@ -332,23 +334,6 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
               </p>
             )}
           </form>
-        )}
-
-        {loginStep === 'input' && (
-          <div className="pt-2 text-center animate-in fade-in duration-300">
-            <button
-              type="button"
-              onClick={() => {
-                setEmulatedUser("visitante@prefeitura.gov.br");
-              }}
-              className={`text-xs font-semibold tracking-wider uppercase transition-all duration-200 hover:scale-102 flex items-center justify-center gap-1.5 mx-auto ${
-                highContrast ? 'text-yellow-400 hover:text-white underline' : 'text-slate-400 hover:text-blue-400 underline underline-offset-4'
-              }`}
-            >
-              <SparklesIcon className="w-3.5 h-3.5" />
-              Experimentar como Visitante (Acesso Rápido)
-            </button>
-          </div>
         )}
 
         {loginStep === 'confirm' && (
@@ -429,9 +414,7 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
 
       <div className="mt-16 flex justify-between w-full text-xs font-bold text-slate-600 border-t border-slate-800 pt-8">
         <button 
-            onClick={() => {
-                onSelectRole('GESTOR');
-            }} 
+            onClick={() => onSelectRole('GESTOR')} 
             className="hover:text-blue-400 uppercase tracking-widest"
         >
             Área do Gestor

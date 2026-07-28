@@ -79,7 +79,7 @@ const MicrolearningFeed: React.FC<{
   const [userState, setUserState] = useState<UserState>(() => {
     const emailKey = auth.currentUser?.email?.toLowerCase();
     const localKey = emailKey ? `alice_progress_v3_${emailKey}` : 'alice_progress_v3';
-    const saved = localStorage.getItem(localKey) || localStorage.getItem('alice_progress_v3') || localStorage.getItem('alice_progress_v2');
+    const saved = localStorage.getItem(localKey);
     let parsed: any = null;
     if (saved) {
       try {
@@ -138,47 +138,86 @@ const MicrolearningFeed: React.FC<{
     const user = auth.currentUser;
     if (!user || !user.email) return;
     setSubmittingSurvey(true);
+    const emailKey = user.email.toLowerCase();
+
+    // 1. Sempre salvar os dados localmente no localStorage como backup de segurança imediata
+    const localSurveyData = {
+      email: emailKey,
+      ...surveyAnswers,
+      timestamp: new Date().toISOString()
+    };
     try {
-      const emailKey = user.email.toLowerCase();
-      // 1. Save results to 'pilotSurveys' collection
-      await setDoc(doc(db, 'pilotSurveys', emailKey), {
-        email: emailKey,
-        ...surveyAnswers,
-        timestamp: new Date().toISOString()
-      }, { merge: true });
+      localStorage.setItem(`pilotSurveys_${emailKey}`, JSON.stringify(localSurveyData));
+    } catch (localErr) {
+      console.warn("Erro ao salvar dados de pesquisa no localStorage:", localErr);
+    }
 
-      // 2. Save pilotStatus completed to 'users' collection
-      await setDoc(doc(db, 'users', emailKey), {
-        pilotStatus: 'completed',
-        status: 'completed'
-      }, { merge: true });
+    try {
+      // Promessa de timeout de 2500ms para evitar travamento em redes lentas ou instáveis
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('timeout')), 2500)
+      );
 
-      // 3. Update local userState to completed status
+      // 2. Salvar no Firestore na coleção 'pilotSurveys'
+      await Promise.race([
+        setDoc(doc(db, 'pilotSurveys', emailKey), {
+          email: emailKey,
+          ...surveyAnswers,
+          timestamp: new Date().toISOString()
+        }, { merge: true }),
+        timeoutPromise
+      ]);
+
+      // 3. Salvar status no Firestore na coleção 'users'
+      await Promise.race([
+        setDoc(doc(db, 'users', emailKey), {
+          pilotStatus: 'completed',
+          status: 'completed'
+        }, { merge: true }),
+        timeoutPromise
+      ]);
+
+      // 4. Atualizar estado local de progresso do usuário
       setUserState(prev => ({
         ...prev,
         pilotStatus: 'completed',
         feedbackNeeded: false
       }));
 
-      // Update localStorage progress
+      // 5. Atualizar progresso no localStorage geral
       const localProgress = localStorage.getItem('alice_progress_v3') || '{}';
       try {
         const parsed = JSON.parse(localProgress);
         parsed.pilotStatus = 'completed';
         localStorage.setItem('alice_progress_v3', JSON.stringify(parsed));
+        localStorage.setItem(`alice_progress_v3_${emailKey}`, JSON.stringify({ ...parsed, pilotStatus: 'completed' }));
       } catch (e) {
-        console.error(e);
+        console.error("Erro ao atualizar localStorage de progresso:", e);
       }
 
       setSurveySuccess(true);
     } catch (err: any) {
-      const isOffline = err instanceof Error && err.message.toLowerCase().includes('offline');
-      if (isOffline) {
-        console.log("Firestore está offline. Pesquisa de pós-uso salva apenas localmente.");
-        setSurveySuccess(true);
-      } else {
-        console.error("Erro ao salvar pesquisa de pós-uso:", err);
+      console.warn("Lentidão ou falha de gravação no Firebase. Executando salvamento resiliente local.");
+      console.error("Erro original do Firebase:", err);
+
+      // Fallback robusto: se falhar o Firebase, garantimos que o usuário termine e o app registre como concluído localmente
+      setUserState(prev => ({
+        ...prev,
+        pilotStatus: 'completed',
+        feedbackNeeded: false
+      }));
+
+      const localProgress = localStorage.getItem('alice_progress_v3') || '{}';
+      try {
+        const parsed = JSON.parse(localProgress);
+        parsed.pilotStatus = 'completed';
+        localStorage.setItem('alice_progress_v3', JSON.stringify(parsed));
+        localStorage.setItem(`alice_progress_v3_${emailKey}`, JSON.stringify({ ...parsed, pilotStatus: 'completed' }));
+      } catch (e) {
+        console.error("Erro no fallback de localStorage:", e);
       }
+
+      setSurveySuccess(true);
     } finally {
       setSubmittingSurvey(false);
     }
@@ -457,7 +496,8 @@ const MicrolearningFeed: React.FC<{
           points: prev.points + 100,
           quizCount: prev.quizCount + 1,
           correctQuizzesCount: newCorrectCount,
-          currentFailCount: 0 
+          currentFailCount: 0,
+          hasTestedReels: true
         };
       });
       setShowReward(true);
@@ -465,7 +505,8 @@ const MicrolearningFeed: React.FC<{
     } else {
       setUserState(prev => ({ 
         ...prev, 
-        currentFailCount: (prev.currentFailCount || 0) + 1 
+        currentFailCount: (prev.currentFailCount || 0) + 1,
+        hasTestedReels: true
       }));
     }
   };
