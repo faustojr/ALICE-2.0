@@ -153,29 +153,19 @@ const MicrolearningFeed: React.FC<{
     }
 
     try {
-      // Promessa de timeout de 2500ms para evitar travamento em redes lentas ou instáveis
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('timeout')), 2500)
-      );
-
       // 2. Salvar no Firestore na coleção 'pilotSurveys'
-      await Promise.race([
-        setDoc(doc(db, 'pilotSurveys', emailKey), {
-          email: emailKey,
-          ...surveyAnswers,
-          timestamp: new Date().toISOString()
-        }, { merge: true }),
-        timeoutPromise
-      ]);
+      await setDoc(doc(db, 'pilotSurveys', emailKey), {
+        email: emailKey,
+        ...surveyAnswers,
+        timestamp: new Date().toISOString()
+      }, { merge: true });
 
       // 3. Salvar status no Firestore na coleção 'users'
-      await Promise.race([
-        setDoc(doc(db, 'users', emailKey), {
-          pilotStatus: 'completed',
-          status: 'completed'
-        }, { merge: true }),
-        timeoutPromise
-      ]);
+      await setDoc(doc(db, 'users', emailKey), {
+        pilotStatus: 'completed',
+        status: 'completed',
+        lastAccess: new Date().toISOString()
+      }, { merge: true });
 
       // 4. Atualizar estado local de progresso do usuário
       setUserState(prev => ({
@@ -269,7 +259,12 @@ const MicrolearningFeed: React.FC<{
     loadRemoteProgress();
   }, []);
 
-  // Salva o progresso localmente e no Firestore com debounce
+  // Salva o progresso localmente de imediato e no Firestore com debounce inteligente
+  const latestUserStateRef = useRef(userState);
+  useEffect(() => {
+    latestUserStateRef.current = userState;
+  }, [userState]);
+
   useEffect(() => {
     const saveLocal = () => {
       localStorage.setItem('alice_progress_v3', JSON.stringify(userState));
@@ -280,7 +275,7 @@ const MicrolearningFeed: React.FC<{
       }
     };
 
-    const saveRemote = async () => {
+    const saveRemote = async (stateToSave = userState) => {
       const user = auth.currentUser;
       if (user && user.email) {
         try {
@@ -288,21 +283,21 @@ const MicrolearningFeed: React.FC<{
           await setDoc(doc(db, 'users', emailKey), {
             email: emailKey,
             name: user.displayName || `Aluno ${initialLevel}`,
-            points: userState.points,
-            currentLevel: userState.currentLevel,
-            currentModuleIndex: userState.currentModuleIndex,
-            currentSlideIndex: userState.currentSlideIndex,
-            highestModuleIndex: userState.highestModuleIndex,
-            correctQuizzesCount: userState.correctQuizzesCount,
-            quizCount: userState.quizCount,
-            completedQuizzes: userState.completedQuizzes || [],
-            lastStudyDate: userState.lastStudyDate || null,
-            streakDays: userState.streakDays || 1,
-            feedbackNeeded: userState.feedbackNeeded || false,
-            pilotStatus: userState.pilotStatus || 'active',
+            points: stateToSave.points,
+            currentLevel: stateToSave.currentLevel,
+            currentModuleIndex: stateToSave.currentModuleIndex,
+            currentSlideIndex: stateToSave.currentSlideIndex,
+            highestModuleIndex: stateToSave.highestModuleIndex,
+            correctQuizzesCount: stateToSave.correctQuizzesCount,
+            quizCount: stateToSave.quizCount,
+            completedQuizzes: stateToSave.completedQuizzes || [],
+            lastStudyDate: stateToSave.lastStudyDate || null,
+            streakDays: stateToSave.streakDays || 1,
+            feedbackNeeded: stateToSave.feedbackNeeded || false,
+            pilotStatus: stateToSave.pilotStatus || 'active',
             area: 'Geral',
             bestTopic: 'Lei 14.133',
-            softSkillsLevel: userState.points >= 3000 ? 'Especialista' : 'Básico',
+            softSkillsLevel: stateToSave.points >= 3000 ? 'Especialista' : 'Básico',
             lastAccess: new Date().toISOString()
           }, { merge: true });
         } catch (e) {
@@ -316,15 +311,18 @@ const MicrolearningFeed: React.FC<{
       }
     };
 
-    // Salva localmente IMEDIATAMENTE quando o estado muda (assim o local nunca fica desatualizado)
+    // Salva localmente IMEDIATAMENTE quando o estado muda
     saveLocal();
 
-    // Debounce de 5 segundos para o remote
-    const timer = setTimeout(saveRemote, 5000);
+    // Debounce de 2.5 segundos para persistência na nuvem (Firestore)
+    const timer = setTimeout(() => {
+      saveRemote(latestUserStateRef.current);
+    }, 2500);
 
-    // Salvar ao fechar/sair - chama apenas saveLocal()
+    // Salvar ao fechar/sair da página
     const handleExit = () => {
       saveLocal();
+      saveRemote(latestUserStateRef.current);
     };
     window.addEventListener('beforeunload', handleExit);
 
@@ -336,7 +334,6 @@ const MicrolearningFeed: React.FC<{
     userState.points, 
     userState.currentLevel, 
     userState.currentModuleIndex, 
-    userState.currentSlideIndex,
     userState.quizCount,
     userState.correctQuizzesCount,
     userState.highestModuleIndex,

@@ -8,16 +8,16 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Rate limiting to prevent bot attacks
-  const limiter = rateLimit({
+  // Rate limiting to prevent abuse on sensitive API routes only (not on static assets/scripts/html)
+  const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
+    max: 500, // Limit each IP to 500 requests per windowMs on API
     message: { error: "Too many requests, please try again later." }
   });
 
-  app.use(limiter);
   app.use(cors());
   app.use(express.json());
+  app.use("/api/", apiLimiter);
 
   // In-memory store for user data
   // In a real app, this would be a database
@@ -34,10 +34,20 @@ async function startServer() {
     }
   };
 
-  // In-memory store for Gemini API limits per user
+  // In-memory store for Gemini API limits per user with periodic memory cleanup
   const geminiLimits: Record<string, { count: number; windowStart: number }> = {};
   const LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
   const MAX_GENERATIONS_PER_WINDOW = 20; // max 20 generations per 15 minutes
+
+  // Periodic cleanup every 10 minutes to prevent memory leak
+  setInterval(() => {
+    const now = Date.now();
+    for (const key of Object.keys(geminiLimits)) {
+      if (now - geminiLimits[key].windowStart > LIMIT_WINDOW_MS) {
+        delete geminiLimits[key];
+      }
+    }
+  }, 10 * 60 * 1000);
 
   // API Routes
   app.post("/api/generateModule", async (req, res) => {
@@ -85,7 +95,14 @@ async function startServer() {
       }
 
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: apiKey });
+      const ai = new GoogleGenAI({ 
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
       
       const LAW_14133_TOPICS = [
           "Âmbito de Aplicação e Princípios (Arts. 1º a 7º)",
@@ -163,7 +180,7 @@ async function startServer() {
       }`;
 
       const response = await ai.models.generateContent({
-          model: 'gemini-3.5-flash',
+          model: 'gemini-3.7-flash',
           contents: prompt,
           config: { 
               responseMimeType: 'application/json',
