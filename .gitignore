@@ -17,16 +17,28 @@ dist-ssr
 .env.*.local
 .env.development
 .env.production
+
+# Regra ampla: nenhum .json entra no repo sem ser liberado explicitamente
+# abaixo. Evita commitar service accounts e chaves por acidente.
 *.json
 !package.json
 !package-lock.json
 !tsconfig*.json
 !metadata.json
+!vercel.json
+!firebase.json
+!.vscode/extensions.json
+!.claude/**/*.json
+
 *service-account*.json
 *credentials*.json
 *keyfile*.json
+firebase-applet-config.json
 .gcloud/
 gcloud-service-key.json
+
+# Vercel
+.vercel
 
 # Firebase
 .firebaserc
