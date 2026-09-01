@@ -12,8 +12,10 @@ import { resolveUnverifiedStudent } from '../lib/auth.js';
 import {
   checkAiQuota,
   createVariant,
+  getTrail,
   moduleKeyOf,
   recordAiUsage,
+  topicForIndex,
 } from '../lib/repositories.js';
 import { generateModuleWithGemini } from '../lib/moduleGenerator.js';
 import type { LearningLevel } from '../types.js';
@@ -69,8 +71,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(429).json({ error: quota.reason, quotaExceeded: true });
     }
 
+    // O tópico vem da trilha no banco. Sem isso o gerador só saberia produzir
+    // conteúdo da Lei 14.133, que era o limite da versão anterior.
+    const trailDoc = await getTrail(String(trail));
+    const position = trailDoc ? topicForIndex(trailDoc, moduleIndex) : null;
+
     const { module, model } = await generateModuleWithGemini(
-      { trail, index: moduleIndex, level, failCount: Number(failCount) || 0 },
+      {
+        trail: trailDoc?.name ?? String(trail),
+        index: moduleIndex,
+        level,
+        failCount: Number(failCount) || 0,
+        topicTitle: position?.topic.title,
+        legalReference: position?.topic.legalReference,
+        cycle: position?.cycle,
+      },
       apiKey
     );
 

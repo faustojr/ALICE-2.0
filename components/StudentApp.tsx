@@ -5,7 +5,12 @@ import MicrolearningFeed from './MicrolearningFeed';
 import PrePilotSurvey from './PrePilotSurvey';
 import { Trophy, ClipboardList, CheckCircle } from 'lucide-react';
 import { auth, onAuthStateChanged } from '../firebase';
-import { fetchSurveyStatus } from '../services/studentApi';
+import {
+  fetchSurveyStatus,
+  fetchTrails,
+  DEFAULT_TRAIL,
+  type TrailOption,
+} from '../services/studentApi';
 import { useAccessibility } from '../App';
 
 // O painel do gestor só é baixado por quem realmente abre o painel.
@@ -64,7 +69,11 @@ function readCachedSurveyStatus(emailKey: string): {
 
 const StudentApp: React.FC = () => {
   const [role, setRole] = useState<UserRole | null>(null);
-  const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY'>('MAIN');
+  const [view, setView] = useState<
+    'MAIN' | 'REELS' | 'CHAT' | 'TRAIL_SELECT' | 'LEVEL_SELECT' | 'PRE_SURVEY'
+  >('MAIN');
+  const [trails, setTrails] = useState<TrailOption[]>([]);
+  const [selectedTrail, setSelectedTrail] = useState<TrailOption>(DEFAULT_TRAIL);
   const [selectedLevel, setSelectedLevel] = useState<'Básico' | 'Intermediário' | 'Especialista'>('Básico');
   const [resume, setResume] = useState(false);
   const [startSurvey, setStartSurvey] = useState(false);
@@ -149,6 +158,27 @@ const StudentApp: React.FC = () => {
     }
   };
 
+  // Catálogo de trilhas da prefeitura. Antes existia uma só, fixa no código.
+  useEffect(() => {
+    if (!currentUser?.email) return;
+    fetchTrails(currentUser.email)
+      .then((list) => {
+        setTrails(list);
+        if (list.length > 0) setSelectedTrail(list[0]);
+      })
+      .catch(() => setTrails([DEFAULT_TRAIL]));
+  }, [currentUser]);
+
+  const handleTrailSelect = (trail: TrailOption) => {
+    setSelectedTrail(trail);
+    setView('LEVEL_SELECT');
+  };
+
+  /** Com uma trilha só, pular a escolha evita uma tela sem decisão real. */
+  const startStudy = () => {
+    setView(trails.length > 1 ? 'TRAIL_SELECT' : 'LEVEL_SELECT');
+  };
+
   const handleLevelSelect = (level: 'Básico' | 'Intermediário' | 'Especialista') => {
     setSelectedLevel(level);
     setView('REELS');
@@ -157,6 +187,9 @@ const StudentApp: React.FC = () => {
   const handleBack = async () => {
     setStartSurvey(false);
     if (view === 'LEVEL_SELECT') {
+      setView(trails.length > 1 ? 'TRAIL_SELECT' : 'MAIN');
+      if (trails.length <= 1) setRole(null);
+    } else if (view === 'TRAIL_SELECT') {
       setRole(null);
       setView('MAIN');
     } else if (view !== 'MAIN') {
@@ -197,7 +230,7 @@ const StudentApp: React.FC = () => {
         <PrePilotSurvey 
           onComplete={() => {
             setHasPreSurveyCompleted(true);
-            setView('LEVEL_SELECT');
+            startStudy();
           }}
           onBack={() => {
             setView('MAIN');
@@ -206,10 +239,45 @@ const StudentApp: React.FC = () => {
       );
     }
 
+    if (view === 'TRAIL_SELECT') {
+      return (
+        <div className="flex flex-col gap-6 items-center justify-center h-full max-w-md mx-auto text-center">
+          <h2 className="text-3xl font-bold text-white mb-2">Escolha a trilha</h2>
+          <p className="text-slate-400 mb-6">
+            Seu município tem {trails.length} trilhas disponíveis.
+          </p>
+          <div className="grid grid-cols-1 gap-4 w-full">
+            {trails.map((trail) => (
+              <button
+                key={trail.slug}
+                onClick={() => handleTrailSelect(trail)}
+                className="p-6 bg-white/5 border border-white/10 rounded-3xl hover:bg-white/10 transition-all text-left group"
+              >
+                <div className="flex justify-between items-start gap-4">
+                  <div className="min-w-0">
+                    <h3 className="text-xl font-bold text-white mb-1">{trail.name}</h3>
+                    <p className="text-gray-400 text-sm">{trail.description}</p>
+                    <p className="text-slate-600 text-xs mt-2">
+                      {trail.topicCount} temas
+                    </p>
+                  </div>
+                  <div className="w-10 h-10 shrink-0 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-all">
+                    →
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+          <button onClick={handleBack} className="mt-8 text-gray-500 hover:text-white">Voltar</button>
+        </div>
+      );
+    }
+
     if (view === 'LEVEL_SELECT') {
       return (
         <div className="flex flex-col gap-6 items-center justify-center h-full max-w-md mx-auto text-center">
-          <h2 className="text-3xl font-bold text-white mb-8">Escolha seu Nível</h2>
+          <h2 className="text-3xl font-bold text-white mb-1">Escolha seu Nível</h2>
+          <p className="text-slate-500 text-sm mb-6">{selectedTrail.name}</p>
           <div className="grid grid-cols-1 gap-4 w-full">
             {(['Básico', 'Intermediário', 'Especialista'] as const).map((lvl) => (
               <button
@@ -245,6 +313,7 @@ const StudentApp: React.FC = () => {
           onBack={handleBack} 
           initialLevel={selectedLevel} 
           startWithPostSurvey={startSurvey} 
+          trailSlug={selectedTrail.slug}
         />
       );
     }
@@ -308,7 +377,7 @@ const StudentApp: React.FC = () => {
         <button 
           onClick={() => {
             if (hasPreSurveyCompleted) {
-              setView('LEVEL_SELECT');
+              startStudy();
             }
           }}
           disabled={!hasPreSurveyCompleted}

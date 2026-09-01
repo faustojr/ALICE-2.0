@@ -5,25 +5,6 @@
 
 import type { LearningLevel } from '../types.js';
 
-export const LAW_14133_TOPICS = [
-  'Âmbito de Aplicação e Princípios (Arts. 1º a 7º)',
-  'Agentes Públicos e Definições (Arts. 7º a 10)',
-  'Fase Preparatória: Planejamento e ETP (Arts. 18 a 27)',
-  'Modalidades: Pregão e Concorrência (Arts. 28 a 30)',
-  'Modalidades: Concurso, Leilão e Diálogo Competitivo (Arts. 31 a 32)',
-  'Critérios de Julgamento (Arts. 33 a 39)',
-  'Procedimentos Auxiliares: Credenciamento e Pré-qualificação (Arts. 78 a 81)',
-  'Procedimentos Auxiliares: Registro de Preços e Registro Cadastral (Arts. 82 a 88)',
-  'Contratação Direta: Inexigibilidade (Art. 74)',
-  'Contratação Direta: Dispensa de Licitação (Art. 75)',
-  'Alienações e Formalização dos Contratos (Arts. 76 a 95)',
-  'Execução e Alteração dos Contratos (Arts. 115 a 136)',
-  'Extinção dos Contratos e Recebimento do Objeto (Arts. 137 a 140)',
-  'Pagamentos e Nulidades (Arts. 141 a 154)',
-  'Infrações e Sanções Administrativas (Arts. 155 a 163)',
-  'Controle das Contratações e PNCP (Arts. 169 a 176)',
-];
-
 const STYLE_DIRECTIVES = [
   'Foco Prático e de Governança (Foque na responsabilidade prática do servidor e em como gerenciar riscos operacionais ou de fiscalização de forma imediata). EVITE frases repetitivas. Use tom dinâmico de consultoria técnica.',
   'Foco em Caso de Estudo Realista (Desenvolva os slides narrando o caso fictício de um município de pequeno/médio porte lidando com esse tema de licitação. Mostre o que deu certo ou o que quase gerou infração).',
@@ -39,10 +20,19 @@ const STYLE_DIRECTIVES = [
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 export interface GenerateModuleInput {
+  /** Nome da trilha, usado no prompt. */
   trail: string;
   index: number;
   level: LearningLevel;
   failCount?: number;
+  /**
+   * Tópico da trilha a abordar. Vem do banco (coleção `trails`), não de uma
+   * lista no código — é o que permite uma trilha nova sem deploy.
+   */
+  topicTitle?: string;
+  legalReference?: string;
+  /** Volta ao mesmo tópico numa passagem posterior pede outro recorte. */
+  cycle?: number;
 }
 
 export interface GeneratedModule {
@@ -61,30 +51,31 @@ export function buildPrompt({
   index,
   level,
   failCount = 0,
+  topicTitle,
+  legalReference,
+  cycle,
 }: GenerateModuleInput): { prompt: string; seed: number } {
   const seed = Math.floor(Math.random() * 1_000_000);
 
-  let currentTopic = '';
-  if (trail?.includes('14.133')) {
-    const topicIndex = index % LAW_14133_TOPICS.length;
-    const cycle = Math.floor(index / LAW_14133_TOPICS.length) + 1;
-    currentTopic = `Tópico: ${LAW_14133_TOPICS[topicIndex]} (Ciclo: ${cycle})`;
-  }
+  const currentTopic = topicTitle
+    ? `Tópico: ${topicTitle}${legalReference ? ` (${legalReference})` : ''}` +
+      (cycle && cycle > 1 ? ` — Ciclo ${cycle}` : '')
+    : '';
 
   const isReattempt = failCount > 0;
   const selectedStyle = STYLE_DIRECTIVES[seed % STYLE_DIRECTIVES.length];
 
-  const prompt = `Você é ALICE, uma assistente de microaprendizagem de elite, especialista em Lei 14.133/21 para servidores municipais brasileiros.
+  const prompt = `Você é ALICE, uma assistente de microaprendizagem de elite para servidores municipais brasileiros, especialista na trilha "${trail}".
 Tarefa: Criar o Módulo #${index + 1} para a trilha "${trail}" no nível "${level}".
 Seed de Variabilidade: ${seed}
 Diretriz Estilística e Pedagógica Atual: ${selectedStyle}
 
-Tópico de referência: ${currentTopic || 'Visão geral da Lei 14.133'}
+Tópico de referência: ${currentTopic || `Visão geral de ${trail}`}
 
 REQUISITOS RIGOROSOS DE AUTENTICIDADE E SELEÇÃO DE LINGUAGEM:
 1. NÃO utilize fórmulas fixas ou chavões repetitivos (ex: não comece todos os slides com "Você sabia?", "Na prática...", "De acordo com..."). Varie as frases de abertura de todos os slides.
 2. Cada uma das 3 partes de slideTexts deve ser autônoma, envolvente e trazer informações práticas de extremo valor legal e operacional para prefeituras brasileiras. Escreva de forma fluida, natural, com forte teor instrutivo.
-3. O Quiz deve testar o entendimento profundo do cenário técnico descrito nos slides. Evite perguntas óbvias ou genéricas sobre transparência. Faça perguntas baseadas em aplicação real do artigo da Lei 14.133.
+3. O Quiz deve testar o entendimento profundo do cenário técnico descrito nos slides. Evite perguntas óbvias ou genéricas. Faça perguntas baseadas em aplicação real do dispositivo legal do tópico.
 4. As opções (options) devem ser realistas e conter distratores técnicos plausíveis. A resposta correta deve ter o valor exato "correct" e as demais "wrong".
 5. GERE OBRIGATORIAMENTE um 'variationId' único de formato 'var_${seed}_${index}_[hash]' que represente a vertente semântica exata abordada neste conteúdo.
 6. Use este 'variationId' e o Seed para criar conteúdo semanticamente inédito: mesmo se o tópico repetir, aborde um detalhe, uma exceção, uma regra secundária ou um cenário do tribunal de contas diferente do usual.

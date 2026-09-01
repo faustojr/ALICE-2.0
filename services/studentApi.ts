@@ -213,3 +213,61 @@ export async function reportQuizResult(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Trilhas
+// ---------------------------------------------------------------------------
+
+export interface TrailOption {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  topicCount: number;
+  levels: string[];
+}
+
+/** Trilha usada quando a rede falha antes da primeira carga do catálogo. */
+export const DEFAULT_TRAIL: TrailOption = {
+  id: 'lei-14133',
+  slug: 'lei-14133',
+  name: 'Lei 14.133/21 — Nova Lei de Licitações',
+  description: 'Trilha principal para servidores de contratações.',
+  topicCount: 16,
+  levels: ['Básico', 'Intermediário', 'Especialista'],
+};
+
+const TRAILS_CACHE_KEY = 'alice_trails_v1';
+
+export async function fetchTrails(email?: string): Promise<TrailOption[]> {
+  try {
+    const query = email ? `?email=${encodeURIComponent(email)}` : '';
+    const response = await fetch(`/api/trails${query}`);
+    if (!response.ok) throw new Error('falha');
+
+    const data = await response.json();
+    const trails: TrailOption[] = data.trails ?? [];
+
+    if (trails.length > 0) {
+      try {
+        localStorage.setItem(TRAILS_CACHE_KEY, JSON.stringify(trails));
+      } catch {
+        // Cota cheia não impede o app de funcionar.
+      }
+      return trails;
+    }
+    return [DEFAULT_TRAIL];
+  } catch {
+    // Offline: usa o catálogo da última visita.
+    try {
+      const cached = localStorage.getItem(TRAILS_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Cache ilegível equivale a cache ausente.
+    }
+    return [DEFAULT_TRAIL];
+  }
+}

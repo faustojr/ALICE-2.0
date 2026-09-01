@@ -165,3 +165,43 @@ export function setVariantStatus(
     body: JSON.stringify({ status }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Trilhas de conteúdo
+// ---------------------------------------------------------------------------
+
+export interface AdminTrailTopic {
+  id: string;
+  title: string;
+  legalReference?: string;
+  baseContent?: { question: string };
+}
+
+export interface AdminTrail {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  tenantId: string | null;
+  topics: AdminTrailTopic[];
+  levels: string[];
+  isPublished: boolean;
+  order?: number;
+  topicCount: number;
+  topicsWithContent: number;
+  updatedAt: string;
+}
+
+export function fetchTrails(): Promise<{ trails: AdminTrail[] }> {
+  return request<{ trails: AdminTrail[] }>('/api/admin/trails');
+}
+
+export function updateTrail(
+  id: string,
+  patch: Record<string, unknown>
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/admin/trails?id=${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}

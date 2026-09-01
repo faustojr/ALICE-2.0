@@ -74,8 +74,10 @@ const LazyImage: React.FC<{ src: string, alt: string, opacity: number, priority?
 const MicrolearningFeed: React.FC<{ 
   onBack: () => void, 
   initialLevel: 'Básico' | 'Intermediário' | 'Especialista',
-  startWithPostSurvey?: boolean 
-}> = ({ onBack, initialLevel, startWithPostSurvey = false }) => {
+  startWithPostSurvey?: boolean,
+  /** Slug da trilha escolhida. Antes era a string fixa "Lei 14.133/2021". */
+  trailSlug?: string,
+}> = ({ onBack, initialLevel, startWithPostSurvey = false, trailSlug = 'lei-14133' }) => {
   const [userState, setUserState] = useState<UserState>(() => {
     const emailKey = auth.currentUser?.email?.toLowerCase();
     const localKey = emailKey ? `alice_progress_v3_${emailKey}` : 'alice_progress_v3';
@@ -291,7 +293,7 @@ const MicrolearningFeed: React.FC<{
         lastStudyDate: stateToSave.lastStudyDate || null,
         streakDays: stateToSave.streakDays || 1,
         feedbackNeeded: stateToSave.feedbackNeeded || false,
-        currentTrail: stateToSave.currentTrail,
+        currentTrail: trailSlug,
         hasTestedReels: stateToSave.hasTestedReels,
       });
 
@@ -418,7 +420,7 @@ const MicrolearningFeed: React.FC<{
   const fetchModule = async (index: number, level: 'Básico' | 'Intermediário' | 'Especialista') => {
     setLoading(true);
     try {
-      const module = await generateReelsModule("Lei 14.133/2021", index, level);
+      const module = await generateReelsModule(trailSlug, index, level);
       setCurrentModule(module);
     } catch (error) {
       console.error("Error fetching module:", error);
@@ -516,7 +518,7 @@ const MicrolearningFeed: React.FC<{
     setSelectedOption(null);
     try {
       const module = await generateReelsModule(
-        "Lei 14.133/2021", 
+        trailSlug, 
         userState.currentModuleIndex, 
         userState.currentLevel, 
         false, 
@@ -1183,7 +1185,7 @@ const MicrolearningFeed: React.FC<{
                     try {
                       // Baixa os próximos 3 módulos
                       for (let i = 1; i <= 3; i++) {
-                        await generateReelsModule("Lei 14.133/2021", userState.currentModuleIndex + i, userState.currentLevel);
+                        await generateReelsModule(trailSlug, userState.currentModuleIndex + i, userState.currentLevel);
                       }
                       setDownloadState('done');
                     } catch (err) {

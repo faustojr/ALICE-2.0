@@ -10,7 +10,9 @@
     "lint": "tsc --noEmit",
     "deploy:rules": "firebase deploy --only firestore:rules",
     "seed:images": "node scripts/seedReelImages.mjs",
-    "seed:images:dry": "node scripts/seedReelImages.mjs --dry-run"
+    "seed:images:dry": "node scripts/seedReelImages.mjs --dry-run",
+    "seed:trails": "tsx scripts/seedTrails.ts",
+    "seed:trails:dry": "tsx scripts/seedTrails.ts --dry-run"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

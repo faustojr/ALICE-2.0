@@ -194,10 +194,21 @@ export interface TrailTopic {
   title: string;
   /** Referência legal: "Arts. 1º a 7º". */
   legalReference?: string;
+
+  /**
+   * Conteúdo escrito à mão para este tópico, servido no primeiro acesso.
+   *
+   * Quando ausente, o primeiro aluno a abrir o módulo dispara UMA geração de
+   * IA, que é salva como variante padrão do módulo. Isso mantém o invariante
+   * de custo: paga-se por módulo, nunca por aluno.
+   */
+  baseContent?: VariantContent;
 }
 
 export interface Trail {
   id: string;
+  /** Identificador estável usado nas chaves de módulo: "lei-14133". */
+  slug: string;
   name: string;
   description: string;
   /** null = disponível para todos os tenants. */
@@ -205,8 +216,20 @@ export interface Trail {
   topics: TrailTopic[];
   levels: LearningLevel[];
   isPublished: boolean;
+  /** Ordem de exibição na escolha da trilha. */
+  order?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Resumo enviado ao aluno na tela de escolha — sem o conteúdo dos módulos. */
+export interface TrailSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  topicCount: number;
+  levels: LearningLevel[];
 }
 
 export type LearningLevel = 'Básico' | 'Intermediário' | 'Especialista';

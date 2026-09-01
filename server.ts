@@ -19,6 +19,7 @@ const ROUTES: { path: string; module: string }[] = [
   { path: '/api/progress', module: './api/progress.ts' },
   { path: '/api/surveys', module: './api/surveys.ts' },
   { path: '/api/module', module: './api/module.ts' },
+  { path: '/api/trails', module: './api/trails.ts' },
   { path: '/api/quizResult', module: './api/quizResult.ts' },
   { path: '/api/reelImages', module: './api/reelImages.ts' },
   { path: '/api/leads', module: './api/leads.ts' },
@@ -26,6 +27,7 @@ const ROUTES: { path: string; module: string }[] = [
   { path: '/api/admin/tenants', module: './api/admin/tenants.ts' },
   { path: '/api/admin/overview', module: './api/admin/overview.ts' },
   { path: '/api/admin/variants', module: './api/admin/variants.ts' },
+  { path: '/api/admin/trails', module: './api/admin/trails.ts' },
 ];
 
 async function startServer() {

@@ -103,9 +103,10 @@ service cloud.firestore {
     // ----------------------------------------------------------------
     // Trilhas publicadas — conteúdo público de leitura.
     // ----------------------------------------------------------------
+    // Leitura pelo cliente passa por /api/trails, que filtra pelo plano do
+    // tenant. A regra aqui cobre apenas leitura administrativa direta.
     match /trails/{trailId} {
-      allow read: if resource.data.isPublished == true
-                  || isSuperAdmin()
+      allow read: if isSuperAdmin()
                   || isTenantAdminOf(resource.data.tenantId);
       allow write: if false;
     }

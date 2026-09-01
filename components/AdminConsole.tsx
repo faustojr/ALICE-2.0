@@ -23,17 +23,23 @@ import {
   FileText,
   ThumbsDown,
   Building,
+  BookOpen,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   AdminApiError,
   createTenant,
   fetchOverview,
   fetchTenants,
+  fetchTrails as fetchAdminTrails,
   fetchVariants,
   formatBRL,
   setVariantStatus,
   updateTenant,
+  updateTrail,
   type AdminOverview,
+  type AdminTrail,
   type AdminVariant,
 } from '../services/adminApi';
 import { auth, googleProvider, signInWithPopup, isVerifiedSession } from '../firebase';
@@ -512,6 +518,199 @@ const ContentAudit: React.FC = () => {
   );
 };
 
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Trilhas de conteúdo.
+ *
+ * Os 16 tópicos da Lei 14.133 viviam dentro do código; publicar uma trilha
+ * nova exigia deploy. Agora elas vêm da coleção `trails`, e esta tela mostra
+ * o que existe e controla o que fica visível para os alunos.
+ *
+ * A edição de tópico a tópico ainda é feita pelo script de carga: o editor
+ * completo é trabalho maior e não bloqueia vender uma segunda trilha.
+ */
+const TrailsPanel: React.FC = () => {
+  const [trails, setTrails] = useState<AdminTrail[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await fetchAdminTrails();
+      setTrails(data.trails);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao carregar trilhas.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const togglePublished = async (trail: AdminTrail) => {
+    const next = !trail.isPublished;
+    const previous = trails;
+    setTrails((list) =>
+      list.map((t) => (t.id === trail.id ? { ...t, isPublished: next } : t))
+    );
+    try {
+      await updateTrail(trail.id, { isPublished: next });
+    } catch (err) {
+      setTrails(previous);
+      setError(err instanceof Error ? err.message : 'Falha ao atualizar a trilha.');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-12 text-center">
+        <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+      </div>
+    );
+  }
+
+  return (
+    <section>
+      <div className="mb-4">
+        <h2 className="text-lg font-bold text-white">Trilhas</h2>
+        <p className="text-slate-500 text-sm">
+          Publicadas ficam disponíveis para as prefeituras conforme o plano.
+        </p>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/25 rounded-2xl p-4 text-red-300 text-sm mb-4">
+          {error}
+        </div>
+      )}
+
+      {trails.length === 0 ? (
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-12 text-center">
+          <BookOpen className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-400 mb-1">Nenhuma trilha cadastrada.</p>
+          <p className="text-slate-600 text-sm">
+            Rode <code className="text-blue-400">npm run seed:trails</code> para carregar
+            a trilha da Lei 14.133.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {trails.map((t) => (
+            <div key={t.id} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
+              <div className="p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${
+                          t.isPublished
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            : 'bg-slate-500/15 text-slate-400 border-slate-500/30'
+                        }`}
+                      >
+                        {t.isPublished ? 'Publicada' : 'Rascunho'}
+                      </span>
+                      <code className="text-xs text-slate-500">{t.slug}</code>
+                    </div>
+                    <h3 className="text-white font-bold">{t.name}</h3>
+                    <p className="text-slate-400 text-sm mt-1">{t.description}</p>
+                  </div>
+
+                  <div className="flex items-center gap-4 shrink-0">
+                    <div className="text-right">
+                      <p className="text-white font-bold tabular-nums">{t.topicCount}</p>
+                      <p className="text-xs text-slate-500">temas</p>
+                    </div>
+                    <div className="text-right">
+                      <p
+                        className={`font-bold tabular-nums ${
+                          t.topicsWithContent === t.topicCount ? 'text-emerald-400' : 'text-amber-400'
+                        }`}
+                      >
+                        {t.topicsWithContent}
+                      </p>
+                      <p className="text-xs text-slate-500">escritos</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 mt-4">
+                  <button
+                    onClick={() => setExpanded(expanded === t.id ? null : t.id)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors"
+                  >
+                    {expanded === t.id ? 'Ocultar temas' : 'Ver temas'}
+                  </button>
+                  <button
+                    onClick={() => togglePublished(t)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                      t.isPublished
+                        ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300'
+                        : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300'
+                    }`}
+                  >
+                    {t.isPublished ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" />
+                        Despublicar
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5" />
+                        Publicar
+                      </>
+                    )}
+                  </button>
+                  {t.tenantId && (
+                    <span className="text-xs text-slate-600 flex items-center gap-1">
+                      <Building className="w-3 h-3" />
+                      exclusiva de uma prefeitura
+                    </span>
+                  )}
+                  {t.topicsWithContent < t.topicCount && (
+                    <span className="text-xs text-amber-500/80">
+                      {t.topicCount - t.topicsWithContent} tema(s) sem conteúdo escrito —
+                      a IA gera no primeiro acesso
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {expanded === t.id && (
+                <div className="border-t border-white/10 bg-black/20 p-5">
+                  <ol className="space-y-1.5">
+                    {t.topics.map((topic, i) => (
+                      <li key={topic.id} className="text-sm flex gap-3 items-baseline">
+                        <span className="text-slate-600 shrink-0 tabular-nums">
+                          {String(i + 1).padStart(2, '0')}.
+                        </span>
+                        <span className="text-slate-300">{topic.title}</span>
+                        {topic.legalReference && (
+                          <span className="text-slate-600 text-xs">{topic.legalReference}</span>
+                        )}
+                        {!topic.baseContent && (
+                          <span className="text-amber-500/70 text-xs">sem conteúdo</span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
 const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -520,7 +719,7 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [error, setError] = useState<{ message: string; status: number } | null>(null);
   const [search, setSearch] = useState('');
   const [showNewTenant, setShowNewTenant] = useState(false);
-  const [tab, setTab] = useState<'OPERACAO' | 'CONTEUDO'>('OPERACAO');
+  const [tab, setTab] = useState<'OPERACAO' | 'CONTEUDO' | 'TRILHAS'>('OPERACAO');
 
   const load = useCallback(async (refreshStats = false) => {
     setError(null);
@@ -705,6 +904,7 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div className="flex gap-1 border-b border-white/10">
           {[
             { id: 'OPERACAO' as const, label: 'Operação' },
+            { id: 'TRILHAS' as const, label: 'Trilhas' },
             { id: 'CONTEUDO' as const, label: 'Conteúdo' },
           ].map((t) => (
             <button
@@ -720,6 +920,8 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             </button>
           ))}
         </div>
+
+        {tab === 'TRILHAS' && <TrailsPanel />}
 
         {tab === 'CONTEUDO' && <ContentAudit />}
 

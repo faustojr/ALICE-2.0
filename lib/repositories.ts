@@ -15,6 +15,7 @@ import {
   type Role,
   type Tenant,
   type TenantStats,
+  type Trail,
 } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -286,6 +287,89 @@ export async function checkAiQuota(
   }
 
   return { allowed: true, used, limit };
+}
+
+// ---------------------------------------------------------------------------
+// Trilhas de conteúdo
+// ---------------------------------------------------------------------------
+
+/**
+ * Trilhas que um tenant pode usar: as globais publicadas mais as próprias.
+ *
+ * Quando `enabledTrails` do tenant está preenchido, ele restringe a lista —
+ * é assim que um plano inferior fica limitado à trilha da 14.133 enquanto um
+ * plano superior enxerga todas.
+ */
+export async function listTrailsFor(tenantId: string | null): Promise<Trail[]> {
+  const db = getDb();
+  const col = db.collection(COLLECTIONS.trails);
+
+  const [globals, owned] = await Promise.all([
+    col.where('tenantId', '==', null).where('isPublished', '==', true).get(),
+    tenantId
+      ? col.where('tenantId', '==', tenantId).get()
+      : Promise.resolve({ docs: [] as FirebaseFirestore.QueryDocumentSnapshot[] }),
+  ]);
+
+  const trails = [...globals.docs, ...owned.docs].map((d) => d.data() as Trail);
+
+  if (tenantId) {
+    const tenant = await getTenant(tenantId);
+    const allowed = tenant?.enabledTrails ?? [];
+    if (allowed.length > 0) {
+      return trails
+        .filter((t) => allowed.includes(t.slug) || t.tenantId === tenantId)
+        .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+    }
+  }
+
+  return trails.sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+}
+
+export async function getTrail(slugOrId: string): Promise<Trail | null> {
+  const db = getDb();
+
+  const byId = await db.collection(COLLECTIONS.trails).doc(slugOrId).get();
+  if (byId.exists) return byId.data() as Trail;
+
+  const bySlug = await db
+    .collection(COLLECTIONS.trails)
+    .where('slug', '==', slugOrId)
+    .limit(1)
+    .get();
+
+  return bySlug.empty ? null : (bySlug.docs[0].data() as Trail);
+}
+
+export async function upsertTrail(trail: Trail): Promise<void> {
+  const db = getDb();
+  await db
+    .collection(COLLECTIONS.trails)
+    .doc(trail.id)
+    .set({ ...trail, updatedAt: new Date().toISOString() }, { merge: true });
+}
+
+export async function listAllTrails(): Promise<Trail[]> {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.trails).get();
+  return snap.docs
+    .map((d) => d.data() as Trail)
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+}
+
+/**
+ * Tópico correspondente a um índice de módulo. A trilha cicla: passado o
+ * último tópico, o aluno recomeça, e o gerador usa o número do ciclo para
+ * pedir um recorte diferente do mesmo tema.
+ */
+export function topicForIndex(trail: Trail, index: number) {
+  if (trail.topics.length === 0) return null;
+  const position = index % trail.topics.length;
+  return {
+    topic: trail.topics[position],
+    position,
+    cycle: Math.floor(index / trail.topics.length) + 1,
+  };
 }
 
 // ---------------------------------------------------------------------------
