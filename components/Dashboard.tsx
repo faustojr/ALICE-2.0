@@ -4,9 +4,14 @@ import { ArrowLeftIcon, DownloadIcon, FunnelIcon, XMarkIcon, CheckCircleIcon, Br
 import { toPng } from 'html-to-image';
 import LawsManager from './LawsManager';
 import SoftSkillsManager from './SoftSkillsManager';
-import { db } from '../firebase';
+import { auth, googleProvider, signInWithPopup } from '../firebase';
 import { PilotResultsPanel } from './PilotResultsPanel';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import {
+  fetchManagerOverview,
+  ManagerApiError,
+  type ManagerMember,
+  type ManagerSurvey,
+} from '../services/managerApi';
 
 interface DashboardProps {
   onBack: () => void;
@@ -457,7 +462,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [currentView, setCurrentView] = useState<DashboardView>('MAIN');
   const [rankingFilter, setRankingFilter] = useState('Geral');
   const [serverData, setServerData] = useState<UserPerformance[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [surveyData, setSurveyData] = useState<ManagerSurvey[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [accessError, setAccessError] = useState<{ message: string; status: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'PILOT'>('OVERVIEW');
   
   // Modals state
@@ -465,24 +472,42 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [showReportConfig, setShowReportConfig] = useState(false);
   const [currentReportConfig, setCurrentReportConfig] = useState<any>(null);
 
-  // Fetch data from Firestore
-  useEffect(() => {
+  // Carrega o painel sob demanda. Sem listener em tempo real: o gestor
+  // consulta pontualmente, e um listener aberto consome leituras enquanto a
+  // aba fica esquecida.
+  const loadDashboard = React.useCallback(async () => {
     setIsLoading(true);
-    const q = query(collection(db, 'users'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const users: UserPerformance[] = [];
-      snapshot.forEach((doc) => {
-        users.push(doc.data() as UserPerformance);
-      });
-      setServerData(users);
+    setAccessError(null);
+    try {
+      const overview = await fetchManagerOverview();
+      setServerData(overview.members as unknown as UserPerformance[]);
+      setSurveyData(overview.surveys);
+    } catch (err) {
+      if (err instanceof ManagerApiError) {
+        setAccessError({ message: err.message, status: err.status });
+      } else {
+        setAccessError({
+          message: err instanceof Error ? err.message : 'Falha ao carregar o painel.',
+          status: 500,
+        });
+      }
+    } finally {
       setIsLoading(false);
-    }, (error) => {
-      console.error("Erro ao buscar dados do Firestore:", error);
-      setIsLoading(false);
-    });
-
-    return () => unsubscribe();
+    }
   }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const handleManagerLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      loadDashboard();
+    } catch (err) {
+      setAccessError({ message: 'Falha no login com Google.', status: 401 });
+    }
+  };
 
   // Lógica para ordenar e filtrar o ranking
   const filteredRanking = useMemo(() => {
@@ -549,6 +574,45 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
     { title: "Precisão nos Quizzes", value: "89%", change: "+3.1%", changeType: "increase" as const },
   ], [serverData.length]);
 
+  // O painel expõe o desempenho de todos os servidores, então exige
+  // identidade verificada — o e-mail sem senha do piloto não basta aqui.
+  if (accessError) {
+    const needsLogin = accessError.status === 401;
+    return (
+      <div className="bg-slate-900 w-full h-full p-6 rounded-2xl border border-slate-800 flex items-center justify-center">
+        <div className="max-w-md w-full text-center">
+          <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 ${
+            needsLogin ? 'bg-blue-500/15 text-blue-400' : 'bg-red-500/15 text-red-400'
+          }`}>
+            <AdminIcon className="w-8 h-8" />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-3">
+            {needsLogin ? 'Painel do Gestor' : 'Acesso restrito'}
+          </h1>
+          <p className="text-slate-400 mb-8">{accessError.message}</p>
+          {needsLogin ? (
+            <button
+              onClick={handleManagerLogin}
+              className="w-full py-4 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors"
+            >
+              Entrar com Google
+            </button>
+          ) : (
+            <button
+              onClick={loadDashboard}
+              className="w-full py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold transition-colors"
+            >
+              Tentar novamente
+            </button>
+          )}
+          <button onClick={onBack} className="mt-4 text-slate-500 hover:text-white text-sm">
+            Voltar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-slate-900 w-full h-full p-4 sm:p-6 rounded-2xl border border-slate-800 overflow-y-auto flex flex-col relative" id="manager-dashboard-container">
       {/* Modals */}
@@ -562,6 +626,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
         </button>
         <h1 className="text-3xl font-bold text-white">Painel do Gestor</h1>
         {isLoading && <div className="ml-4 w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>}
+        <button
+          onClick={loadDashboard}
+          disabled={isLoading}
+          className="ml-auto px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold transition-colors disabled:opacity-50"
+          title="Os dados são carregados ao abrir o painel"
+        >
+          Atualizar
+        </button>
       </div>
 
       {/* Tabs */}
@@ -690,7 +762,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
         </>
       ) : (
         <div className="flex-grow overflow-y-auto">
-          <PilotResultsPanel />
+          <PilotResultsPanel users={serverData as any} surveys={surveyData} loading={isLoading} />
         </div>
       )}
     </div>

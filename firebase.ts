@@ -6,7 +6,7 @@ import {
   onAuthStateChanged as baseOnAuthStateChanged,
   signOut as baseSignOut,
 } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+
 
 /**
  * Configuração via variáveis de ambiente (VITE_FIREBASE_*).
@@ -25,8 +25,6 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const FIRESTORE_DATABASE_ID = import.meta.env.VITE_FIRESTORE_DATABASE_ID;
-
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
   console.error(
     'Configuração do Firebase ausente. Defina VITE_FIREBASE_API_KEY, ' +
@@ -37,10 +35,9 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
 
 const app = initializeApp(firebaseConfig);
 
-export const db = FIRESTORE_DATABASE_ID
-  ? getFirestore(app, FIRESTORE_DATABASE_ID)
-  : getFirestore(app);
-
+// O cliente não fala mais com o Firestore: as regras negam acesso do browser
+// e todo dado passa pelas rotas em /api. Só o Auth continua aqui — o que
+// também tira o SDK do Firestore do bundle.
 const baseAuth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -167,16 +164,3 @@ export const signInWithPopup = async (_authInstance: any, provider: any) => {
   return result;
 };
 
-if (import.meta.env.DEV) {
-  getDocFromServer(doc(db, 'test', 'connection'))
-    .then(() => console.log('Conexão com Firebase estabelecida'))
-    .catch((error) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes('offline')) {
-        console.log('Firebase offline — fallback local ativo.');
-      } else if (msg.includes('permission') || msg.includes('PERMISSION_DENIED')) {
-        // Esperado: as regras de segurança negam leitura anônima.
-        console.log('Firebase conectado (leitura anônima negada pelas regras).');
-      }
-    });
-}

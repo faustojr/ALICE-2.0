@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { db } from '../firebase';
-import { collection, onSnapshot } from 'firebase/firestore';
+import type { ManagerSurvey } from '../services/managerApi';
 import { 
   Download, 
   Users, 
@@ -21,28 +20,6 @@ interface UserRecord {
   currentLevel?: string;
   currentModuleIndex?: number;
   points?: number;
-}
-
-interface SurveyRecord {
-  id: string;
-  email?: string;
-  // Pre-survey fields
-  pre_experienceTime?: string;
-  pre_formalCapacitation?: boolean | string;
-  pre_generalKnowledge?: number;
-  pre_prepKnowledge?: number;
-  pre_confidenceBasic?: number;
-  pre_interestCustomTool?: number;
-  // Post-survey fields
-  pos_daysUsed?: number;
-  pos_generalKnowledge?: number;
-  pos_prepKnowledge?: number;
-  pos_confidenceBasic?: number;
-  pos_perceivedAdaptation?: number;
-  pos_microLearningHelp?: number;
-  pos_easeOfUse?: number;
-  pos_motivation?: number;
-  pos_useAgain?: number;
 }
 
 interface MergedParticipant {
@@ -77,84 +54,23 @@ interface MergedParticipant {
   delta_cd: number | null;
 }
 
-export const PilotResultsPanel: React.FC = () => {
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [surveys, setSurveys] = useState<SurveyRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [errorHeader, setErrorHeader] = useState<string | null>(null);
+interface PilotResultsPanelProps {
+  users: UserRecord[];
+  surveys: ManagerSurvey[];
+  loading?: boolean;
+}
 
-  // Set up real-time onSnapshot listeners
-  useEffect(() => {
-    setLoading(true);
-    
-    const unsubUsers = onSnapshot(
-      collection(db, 'users'), 
-      (snapshot) => {
-        const uList: UserRecord[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          uList.push({
-            id: doc.id,
-            email: data.email || doc.id,
-            name: data.name,
-            pilotStatus: data.pilotStatus || data.status,
-            cycleCount: data.cycleCount !== undefined ? data.cycleCount : undefined,
-            currentLevel: data.currentLevel,
-            currentModuleIndex: data.currentModuleIndex,
-            points: data.points
-          });
-        });
-        setUsers(uList);
-        setErrorHeader(null);
-      },
-      (err) => {
-        console.error("Error subscribing to users:", err);
-        setErrorHeader("Erro de permissão ou conexão ao carregar usuários.");
-      }
-    );
-
-    const unsubSurveys = onSnapshot(
-      collection(db, 'pilotSurveys'),
-      (snapshot) => {
-        const sList: SurveyRecord[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          sList.push({
-            id: doc.id,
-            email: data.email,
-            // Pre
-            pre_experienceTime: data.pre_experienceTime || data.pre_tempoAtuacao || data.experienceTime,
-            pre_formalCapacitation: data.pre_formalCapacitation !== undefined ? data.pre_formalCapacitation : (data.pre_capacitacaoPrevia || data.capacitacaoFormal),
-            pre_generalKnowledge: data.pre_generalKnowledge || data.pre_conhecimentoGeral || data.pre_conhecimento_geral,
-            pre_prepKnowledge: data.pre_prepKnowledge || data.pre_conhecimentoFasePrep || data.pre_conhecimento_fase_preparatoria,
-            pre_confidenceBasic: data.pre_confidenceBasic || data.pre_confiancaDuvidasBasicas || data.pre_confidenceDoubt,
-            pre_interestCustomTool: data.pre_interestCustomTool || data.pre_interesseFerramenta || data.pre_interestCustom,
-            // Post
-            pos_daysUsed: data.pos_daysUsed || data.pos_diasUsados || data.pos_activeDays,
-            pos_generalKnowledge: data.pos_generalKnowledge || data.pos_conhecimentoGeral || data.pos_conhecimento_geral,
-            pos_prepKnowledge: data.pos_prepKnowledge || data.pos_conhecimentoFasePrep || data.pos_conhecimento_fase_preparatoria,
-            pos_confidenceBasic: data.pos_confidenceBasic || data.pos_confiancaDuvidasBasicas || data.pos_confidenceDoubt,
-            pos_perceivedAdaptation: data.pos_perceivedAdaptation || data.pos_percepcaoAdaptacao || data.pos_adaptationPerceived,
-            pos_microLearningHelp: data.pos_microLearningHelp || data.pos_ajudaMicroaprendizagem || data.pos_microlearningHelp,
-            pos_easeOfUse: data.pos_easeOfUse || data.pos_facilidadeUso || data.pos_usability,
-            pos_motivation: data.pos_motivation || data.pos_motivacaoContinuar || data.pos_motivationContinue,
-            pos_useAgain: data.pos_useAgain || data.pos_usariaNovamente || data.pos_wouldUseAgain
-          });
-        });
-        setSurveys(sList);
-        setLoading(false);
-      },
-      (err) => {
-        console.error("Error subscribing to pilotSurveys:", err);
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      unsubUsers();
-      unsubSurveys();
-    };
-  }, []);
+/**
+ * Recebe os dados já carregados pelo Dashboard. Antes mantinha dois listeners
+ * onSnapshot próprios, o que duplicava a leitura das mesmas coleções e abria
+ * caminho para os dois painéis divergirem entre si.
+ */
+export const PilotResultsPanel: React.FC<PilotResultsPanelProps> = ({
+  users,
+  surveys,
+  loading = false,
+}) => {
+  const errorHeader: string | null = null;
 
   // helper to normalise format of formal training
   const formatFormalTraining = (val: any) => {

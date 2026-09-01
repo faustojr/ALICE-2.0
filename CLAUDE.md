@@ -35,12 +35,20 @@ o dado de quem está preparado.
 
 ## Arquitetura — o que não quebrar
 
-### 1. O Firestore é fechado ao cliente
+### 1. O cliente não fala com o Firestore
 
-`firestore.rules` nega tudo por padrão. Toda escrita passa por `/api`, que usa
-o Admin SDK e valida tenant, papel e cota. **Não reintroduza escrita direta do
-browser no Firestore** — o modo de login atual não produz identidade verificável,
-então uma regra permissiva abre o banco para a internet.
+`firestore.rules` nega tudo por padrão e o front **nem importa mais o SDK do
+Firestore** — só o Auth. Todo dado entra e sai por `/api`, que usa o Admin SDK
+e valida tenant, papel e cota.
+
+**Não reintroduza acesso direto do browser ao Firestore.** O modo de login atual
+não produz identidade verificável, então uma regra permissiva abre o banco para
+a internet. O padrão perigoso a evitar é o que existia antes: `setDoc` dentro de
+um `try/catch` que cai no `localStorage` — com as regras fechadas isso perde
+dados em silêncio, porque o app continua funcionando e nada chega ao servidor.
+
+Para gravar do cliente, use `services/studentApi.ts` (aluno) ou
+`services/managerApi.ts` / `services/adminApi.ts` (painéis).
 
 ### 2. Multi-tenancy
 
@@ -58,6 +66,10 @@ contrário uma prefeitura enxerga os dados de outra.
 Nunca conceda privilégio com base num e-mail não verificado. `requireSuperAdmin`
 e `requireTenantAdmin` em `lib/auth.ts` são os únicos caminhos para rota
 administrativa.
+
+A régra prática: se a rota devolve dados de **outra pessoa**, exige identidade
+verificada. O painel do gestor mostra o desempenho de todos os servidores da
+prefeitura, então entra nessa categoria — não basta digitar um e-mail.
 
 ### 4. Custo de IA é controlado por cota
 
@@ -104,15 +116,21 @@ npm run build    # build de produção
 ## Estado atual e próximos passos
 
 Concluído: multi-tenancy, fechamento do Firestore, API serverless, console
-administrativo, landing page, code splitting por rota.
+administrativo, landing page, code splitting por rota, migração completa do
+front para a API (aluno, gestor e admin).
 
 Em aberto, na ordem que faz diferença:
 
-1. **Migrar o `Dashboard` do gestor para as rotas novas** — ainda lê o Firestore
-   direto e vai parar de funcionar com as regras fechadas.
-2. **Popular o primeiro tenant real** e validar o fluxo ponta a ponta.
-3. **Trilhas configuráveis**: o conteúdo de fallback ainda está hardcoded em
+1. **Publicar as regras** (`npm run deploy:rules`) — enquanto isso não roda em
+   produção, o banco segue aberto. O código já não depende de acesso direto.
+2. **Popular o primeiro tenant real** e validar o fluxo ponta a ponta. Os
+   usuários do piloto atual não têm `tenantId`; só o super admin os enxerga.
+3. **Nomear o gestor da prefeitura** como `TENANT_ADMIN` via `Membership` — sem
+   isso, ninguém além do super admin abre o painel do gestor.
+4. **Trilhas configuráveis**: o conteúdo de fallback ainda está hardcoded em
    `services/geminiService.ts` com 16 tópicos da Lei 14.133.
-4. **Cobrança**: hoje o plano é um campo no tenant, sem integração de pagamento.
-5. **Certificados de conclusão** — pedido recorrente de quem precisa comprovar
+5. **Cobrança**: hoje o plano é um campo no tenant, sem integração de pagamento.
+6. **Certificados de conclusão** — pedido recorrente de quem precisa comprovar
    capacitação ao Tribunal de Contas.
+7. **CI**: o repositório não tem workflow; `npm run lint` e `npm run build` só
+   rodam localmente.

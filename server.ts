@@ -19,6 +19,7 @@ const ROUTES: { path: string; module: string }[] = [
   { path: '/api/progress', module: './api/progress.ts' },
   { path: '/api/surveys', module: './api/surveys.ts' },
   { path: '/api/leads', module: './api/leads.ts' },
+  { path: '/api/manager/overview', module: './api/manager/overview.ts' },
   { path: '/api/admin/tenants', module: './api/admin/tenants.ts' },
   { path: '/api/admin/overview', module: './api/admin/overview.ts' },
 ];
