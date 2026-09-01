@@ -248,6 +248,12 @@ export interface ModuleContent {
   feedbackCorrect: string;
   feedbackWrong: string;
   variationId?: string;
+  /**
+   * Id da variante servida, quando o conteúdo veio do banco de variantes.
+   * Ausente no conteúdo padrão do app — que, por não ter id, não é promovido
+   * nem penalizado pelo resultado do quiz.
+   */
+  variantId?: string;
 }
 
 export interface Message {
@@ -316,6 +322,99 @@ export interface Session {
   role: Role;
   /** true quando a identidade veio de um provedor verificado (Google). */
   verified: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Variantes de módulo — o ciclo de aprendizado da plataforma
+//
+// A IA só é acionada quando o aluno erra: o erro indica que a explicação
+// padrão não funcionou para ele. O conteúdo gerado nasce como CANDIDATE e,
+// quando leva alunos distintos ao acerto, é promovido a PROMOTED e passa a
+// ser servido como padrão. Assim cada geração é paga uma vez e o conteúdo
+// melhora com o uso, em vez de ser descartado.
+// ---------------------------------------------------------------------------
+
+export type VariantOrigin = 'STANDARD' | 'AI' | 'CURATED';
+
+export type VariantStatus =
+  /** Gerada pela IA, ainda sem evidência de que ensina melhor. */
+  | 'CANDIDATE'
+  /** Levou alunos distintos ao acerto; é o conteúdo padrão do módulo. */
+  | 'PROMOTED'
+  /** Descartada por revisão humana ou desempenho ruim. */
+  | 'REJECTED';
+
+/** Acertos de alunos distintos necessários para promover uma variante. */
+export const PROMOTION_THRESHOLD = 3;
+
+export interface VariantContent {
+  title: string;
+  slideTexts: string[];
+  question: string;
+  options: Option[];
+  feedbackCorrect: string;
+  feedbackWrong: string;
+}
+
+export interface ModuleVariant {
+  id: string;
+  /** Chave do módulo: `${trail}__${level}__${index}`. */
+  moduleKey: string;
+  trail: string;
+  level: LearningLevel;
+  moduleIndex: number;
+
+  variationId: string;
+  content: VariantContent;
+  origin: VariantOrigin;
+  status: VariantStatus;
+
+  /** Tenant que originou a variante. null = disponível para todos. */
+  tenantId: string | null;
+
+  stats: {
+    served: number;
+    correct: number;
+    wrong: number;
+    /** E-mails que acertaram, para contar alunos distintos, não tentativas. */
+    correctBy: string[];
+  };
+
+  createdAt: string;
+  createdBy: string;
+  promotedAt?: string;
+  /** Preenchido quando um humano rejeita a variante pelo console. */
+  rejectedAt?: string;
+  rejectedBy?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Imagens de fundo dos reels
+//
+// Ficam no Firebase Storage com os metadados no Firestore. Antes as imagens
+// eram buscadas do Unsplash a cada exibição, o que deixava o app dependente
+// de um serviço externo — fundo preto em rede ruim de prefeitura.
+// ---------------------------------------------------------------------------
+
+export interface ReelImage {
+  id: string;
+  /** URL pública no Firebase Storage. */
+  url: string;
+  /** Caminho no bucket, para gerenciar o arquivo depois. */
+  storagePath: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  /** Palavras que descrevem a cena, para escolher fundo coerente com o tema. */
+  tags: string[];
+  /** Procedência: exigida pela licença de alguns bancos e boa prática sempre. */
+  credit: {
+    source: string;
+    author?: string;
+    sourceUrl?: string;
+    license: string;
+  };
+  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------

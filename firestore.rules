@@ -111,6 +111,24 @@ service cloud.firestore {
     }
 
     // ----------------------------------------------------------------
+    // Variantes de módulo — o conteúdo servido ao aluno.
+    // Leitura e escrita passam por /api: a promoção depende de contagem
+    // transacional que o cliente não pode fazer nem influenciar.
+    // ----------------------------------------------------------------
+    match /moduleVariants/{variantId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Acervo de fundos dos reels — metadados de imagens públicas.
+    // ----------------------------------------------------------------
+    match /reelImages/{imageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
     // Telemetria de IA e leads comerciais — somente servidor.
     // ----------------------------------------------------------------
     match /aiUsage/{recordId} {

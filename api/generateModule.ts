@@ -9,7 +9,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCors, clientIp, handleError, methodNotAllowed, rateLimit } from '../lib/http.js';
 import { resolveUnverifiedStudent } from '../lib/auth.js';
-import { checkAiQuota, recordAiUsage } from '../lib/repositories.js';
+import {
+  checkAiQuota,
+  createVariant,
+  moduleKeyOf,
+  recordAiUsage,
+} from '../lib/repositories.js';
 import { generateModuleWithGemini } from '../lib/moduleGenerator.js';
 import type { LearningLevel } from '../types.js';
 
@@ -69,6 +74,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       apiKey
     );
 
+    // A variante é persistida como candidata em vez de descartada depois do
+    // uso. Se levar alunos distintos ao acerto, /api/quizResult a promove a
+    // padrão do módulo — e a geração deixa de ser paga de novo por cada aluno
+    // que erra a mesma questão.
+    let variantId: string | null = null;
+    try {
+      const variant = await createVariant({
+        moduleKey: moduleKeyOf(String(trail), level, moduleIndex),
+        trail: String(trail),
+        level,
+        moduleIndex,
+        variationId: module.variationId,
+        content: {
+          title: module.title,
+          slideTexts: module.slideTexts,
+          question: module.question,
+          options: module.options,
+          feedbackCorrect: module.feedbackCorrect,
+          feedbackWrong: module.feedbackWrong,
+        },
+        origin: 'AI',
+        tenantId: session.tenantId ?? null,
+        createdBy: session.email,
+      });
+      variantId = variant.id;
+    } catch (err) {
+      // Falha ao persistir não impede o aluno de estudar agora.
+      console.error('[moduleVariants] falha ao registrar variante', err);
+    }
+
     // Telemetria não pode derrubar a resposta do aluno.
     recordAiUsage({
       tenantId: session.tenantId ?? 'sem-tenant',
@@ -80,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cacheHit: false,
     }).catch((err) => console.error('[aiUsage] falha ao registrar telemetria', err));
 
-    return res.json(module);
+    return res.json({ ...module, variantId });
   } catch (err) {
     return handleError(res, err, 'generateModule');
   }

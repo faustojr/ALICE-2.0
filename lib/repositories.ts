@@ -7,8 +7,11 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getDb, COLLECTIONS, emailKey } from './firebaseAdmin.js';
 import {
   PLANS,
+  PROMOTION_THRESHOLD,
   type AiUsageRecord,
   type Membership,
+  type ModuleVariant,
+  type ReelImage,
   type Role,
   type Tenant,
   type TenantStats,
@@ -283,6 +286,209 @@ export async function checkAiQuota(
   }
 
   return { allowed: true, used, limit };
+}
+
+// ---------------------------------------------------------------------------
+// Variantes de módulo e promoção por desempenho
+// ---------------------------------------------------------------------------
+
+export function moduleKeyOf(trail: string, level: string, index: number): string {
+  return `${trail}__${level}__${index}`;
+}
+
+/**
+ * Variante que deve ser servida a um módulo: a promovida do tenant, se
+ * houver; senão a promovida global; senão nada, e o chamador usa o conteúdo
+ * padrão embutido no app.
+ */
+export async function findPromotedVariant(
+  moduleKey: string,
+  tenantId: string | null
+): Promise<ModuleVariant | null> {
+  const db = getDb();
+  const col = db.collection(COLLECTIONS.moduleVariants);
+
+  if (tenantId) {
+    const own = await col
+      .where('moduleKey', '==', moduleKey)
+      .where('status', '==', 'PROMOTED')
+      .where('tenantId', '==', tenantId)
+      .limit(1)
+      .get();
+    if (!own.empty) return own.docs[0].data() as ModuleVariant;
+  }
+
+  const global = await col
+    .where('moduleKey', '==', moduleKey)
+    .where('status', '==', 'PROMOTED')
+    .where('tenantId', '==', null)
+    .limit(1)
+    .get();
+
+  return global.empty ? null : (global.docs[0].data() as ModuleVariant);
+}
+
+export async function getVariant(variantId: string): Promise<ModuleVariant | null> {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.moduleVariants).doc(variantId).get();
+  return snap.exists ? (snap.data() as ModuleVariant) : null;
+}
+
+export async function createVariant(
+  input: Omit<ModuleVariant, 'id' | 'createdAt' | 'stats' | 'status'>
+): Promise<ModuleVariant> {
+  const db = getDb();
+  const doc = db.collection(COLLECTIONS.moduleVariants).doc();
+
+  const variant: ModuleVariant = {
+    ...input,
+    id: doc.id,
+    status: 'CANDIDATE',
+    stats: { served: 1, correct: 0, wrong: 0, correctBy: [] },
+    createdAt: new Date().toISOString(),
+  };
+
+  await doc.set(variant);
+  return variant;
+}
+
+export interface QuizOutcome {
+  promoted: boolean;
+  correctCount: number;
+  threshold: number;
+}
+
+/**
+ * Registra o resultado do quiz numa variante e promove quando alunos
+ * distintos o bastante acertaram com ela.
+ *
+ * Roda em transação: sem isso, dois alunos respondendo ao mesmo tempo leem o
+ * mesmo contador e a variante é promovida com menos acertos do que o exigido.
+ */
+export async function recordVariantOutcome(
+  variantId: string,
+  email: string,
+  correct: boolean
+): Promise<QuizOutcome> {
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.moduleVariants).doc(variantId);
+  const key = emailKey(email);
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      return { promoted: false, correctCount: 0, threshold: PROMOTION_THRESHOLD };
+    }
+
+    const variant = snap.data() as ModuleVariant;
+    const stats = variant.stats ?? { served: 0, correct: 0, wrong: 0, correctBy: [] };
+    const correctBy = new Set(stats.correctBy ?? []);
+
+    if (correct) correctBy.add(key);
+
+    const updated = {
+      ...stats,
+      correct: stats.correct + (correct ? 1 : 0),
+      wrong: stats.wrong + (correct ? 0 : 1),
+      // Alunos distintos, não tentativas: o mesmo aluno acertando de novo não
+      // é evidência nova de que o conteúdo ensina.
+      correctBy: Array.from(correctBy).slice(0, 500),
+    };
+
+    const distinctCorrect = updated.correctBy.length;
+    const shouldPromote =
+      variant.status === 'CANDIDATE' && distinctCorrect >= PROMOTION_THRESHOLD;
+
+    tx.update(ref, {
+      stats: updated,
+      ...(shouldPromote
+        ? { status: 'PROMOTED', promotedAt: new Date().toISOString() }
+        : {}),
+    });
+
+    // Uma variante promovida substitui a anterior do mesmo escopo; duas
+    // promovidas para o mesmo módulo tornariam o conteúdo servido imprevisível.
+    if (shouldPromote) {
+      const previous = await db
+        .collection(COLLECTIONS.moduleVariants)
+        .where('moduleKey', '==', variant.moduleKey)
+        .where('status', '==', 'PROMOTED')
+        .where('tenantId', '==', variant.tenantId ?? null)
+        .get();
+
+      for (const doc of previous.docs) {
+        if (doc.id !== variantId) {
+          tx.update(doc.ref, { status: 'REJECTED', rejectedAt: new Date().toISOString() });
+        }
+      }
+    }
+
+    return {
+      promoted: shouldPromote,
+      correctCount: distinctCorrect,
+      threshold: PROMOTION_THRESHOLD,
+    };
+  });
+}
+
+export async function incrementVariantServed(variantId: string): Promise<void> {
+  const db = getDb();
+  await db
+    .collection(COLLECTIONS.moduleVariants)
+    .doc(variantId)
+    .update({ 'stats.served': FieldValue.increment(1) })
+    .catch(() => {
+      // Contador de exibição não pode derrubar a entrega do conteúdo.
+    });
+}
+
+export async function listVariants(filter: {
+  status?: string;
+  tenantId?: string | null;
+  limit?: number;
+}): Promise<ModuleVariant[]> {
+  const db = getDb();
+  let query = db
+    .collection(COLLECTIONS.moduleVariants)
+    .orderBy('createdAt', 'desc') as FirebaseFirestore.Query;
+
+  if (filter.status) query = query.where('status', '==', filter.status);
+  if (filter.tenantId !== undefined) query = query.where('tenantId', '==', filter.tenantId);
+
+  const snap = await query.limit(filter.limit ?? 100).get();
+  return snap.docs.map((d) => d.data() as ModuleVariant);
+}
+
+export async function setVariantStatus(
+  variantId: string,
+  status: 'PROMOTED' | 'REJECTED',
+  actor: string
+): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  await db
+    .collection(COLLECTIONS.moduleVariants)
+    .doc(variantId)
+    .update(
+      status === 'PROMOTED'
+        ? { status, promotedAt: now }
+        : { status, rejectedAt: now, rejectedBy: actor }
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Imagens de fundo dos reels
+// ---------------------------------------------------------------------------
+
+export async function listReelImages(): Promise<ReelImage[]> {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.reelImages).get();
+  return snap.docs.map((d) => d.data() as ReelImage);
+}
+
+export async function upsertReelImage(image: ReelImage): Promise<void> {
+  const db = getDb();
+  await db.collection(COLLECTIONS.reelImages).doc(image.id).set(image, { merge: true });
 }
 
 // ---------------------------------------------------------------------------

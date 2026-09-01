@@ -177,3 +177,39 @@ export async function fetchSurveyStatus(email: string): Promise<SurveyStatus | n
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Resultado do quiz — alimenta a promoção de variantes
+// ---------------------------------------------------------------------------
+
+export interface QuizResultResponse {
+  ok: boolean;
+  promoted: boolean;
+  correctCount?: number;
+  threshold?: number;
+}
+
+/**
+ * Informa o acerto ou erro numa variante. Quando alunos distintos o bastante
+ * acertam, o servidor promove aquela variante a conteúdo padrão do módulo.
+ *
+ * Sem fila de reenvio: é telemetria de aprendizado, e uma resposta perdida
+ * por rede instável apenas adia a promoção — não corrompe nada.
+ */
+export async function reportQuizResult(
+  email: string,
+  variantId: string,
+  correct: boolean
+): Promise<QuizResultResponse | null> {
+  try {
+    const response = await fetch('/api/quizResult', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, variantId, correct }),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}

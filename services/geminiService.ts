@@ -1,20 +1,17 @@
 import { ModuleContent, Slide } from '../types';
 import { auth } from '../firebase';
+import { loadReelImages, pickImage } from './reelImages';
 
-async function generateImageForSlide(promptText: string): Promise<string> {
-    // Generate a reliable Unsplash image based on the prompt keywords
-    // We use the prompt text to search for more relevant images
-    const searchKeywords = promptText.split(' ').slice(0, 3).join(',');
-    const fallbackIds = [
-        "1497366216548-37526070297c",
-        "1589829545856-d10d557cf95f",
-        "1454165804606-c3d57bc86b40",
-        "1551288049-bebda4e38f71"
-    ];
-    
-    // Use a timestamp to force variety and the prompt to increase relevance
-    const timestamp = Date.now();
-    return `https://images.unsplash.com/featured/?corporate,${searchKeywords},office&t=${timestamp}`;
+/**
+ * Fundo de um slide, vindo do acervo próprio no Firebase Storage.
+ *
+ * O seed combina módulo e posição para que o mesmo slide mostre sempre a
+ * mesma imagem: fundo trocando a cada rolagem distrai de um conteúdo que já
+ * dura três minutos.
+ */
+async function imageForSlide(moduleIndex: number, slideIndex: number): Promise<string> {
+  const images = await loadReelImages();
+  return pickImage(images, moduleIndex * 3 + slideIndex);
 }
 
 const LAW_14133_TOPICS = [
@@ -91,21 +88,6 @@ function getValidCacheContent(key: string, failCount: number): ModuleContent | n
 function cleanTopicName(topic: string): string {
     return topic.split('(')[0].trim();
 }
-
-const FALLBACK_IMAGE_POOLS = [
-    "photo-1589829545856-d10d557cf95f",
-    "photo-1454165804606-c3d57bc86b40",
-    "photo-1551288049-bebda4e38f71",
-    "photo-1450133064473-71024230f91b",
-    "photo-1507679799987-c73779587ccf",
-    "photo-1486406146926-c627a92ad1ab",
-    "photo-1521791136368-1a46827db3ad",
-    "photo-1541872703-74c5e44368f9",
-    "photo-1517048676732-d65bc937f952",
-    "photo-1568992687947-868a62a9f521",
-    "photo-1557804506-669a67965ba0",
-    "photo-1497366216548-37526070297c"
-];
 
 interface FallbackEntry {
     intro: string;
@@ -294,20 +276,19 @@ const FALLBACK_CONTENT: Record<number, FallbackEntry> = {
     }
 };
 
-function getStandardModuleContent(
+async function getStandardModuleContent(
     index: number, 
     level: 'Básico' | 'Intermediário' | 'Especialista'
-): ModuleContent {
+): Promise<ModuleContent> {
     const topicIndex = index % LAW_14133_TOPICS.length;
     const topic = LAW_14133_TOPICS[topicIndex];
     const cleanTopic = cleanTopicName(topic);
     
     const entry = FALLBACK_CONTENT[topicIndex] || FALLBACK_CONTENT[0];
     
-    const fallbackImages = [0, 1, 2].map((slideIndex) => {
-        const imgId = FALLBACK_IMAGE_POOLS[(topicIndex * 3 + slideIndex) % FALLBACK_IMAGE_POOLS.length];
-        return `https://images.unsplash.com/${imgId}?q=80&w=600&t=${(index + 1) * (slideIndex + 1)}`;
-    });
+    const fallbackImages = await Promise.all(
+        [0, 1, 2].map((slideIndex) => imageForSlide(index, slideIndex))
+    );
 
     const levelText = level === 'Especialista' ? 'Especialista' : level === 'Intermediário' ? 'Intermediário' : 'Básico';
 
@@ -337,6 +318,50 @@ function getStandardModuleContent(
     };
 }
 
+/**
+ * Busca a variante promovida do módulo. Retorna null quando ainda não há uma
+ * — situação normal enquanto o conteúdo padrão está dando conta.
+ */
+async function fetchPromotedVariant(
+    trail: string,
+    index: number,
+    level: 'Básico' | 'Intermediário' | 'Especialista'
+): Promise<ModuleContent | null> {
+    try {
+        const email = auth.currentUser?.email;
+        const params = new URLSearchParams({ trail, level, index: String(index) });
+        if (email) params.set('email', email);
+
+        const response = await fetch(`/api/module?${params}`);
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        if (data.source !== 'PROMOTED' || !data.variant) return null;
+
+        const content = data.variant.content;
+        const slides: Slide[] = await Promise.all(
+            content.slideTexts.map(async (text: string, i: number) => ({
+                text,
+                imageUrl: await imageForSlide(index, i),
+            }))
+        );
+
+        return {
+            title: content.title,
+            slides,
+            question: content.question,
+            options: content.options,
+            feedbackCorrect: content.feedbackCorrect,
+            feedbackWrong: content.feedbackWrong,
+            variationId: data.variant.variationId,
+            variantId: data.variant.id,
+        };
+    } catch {
+        // Sem rede, o conteúdo padrão local resolve.
+        return null;
+    }
+}
+
 export async function generateReelsModule(
     trail: string, 
     index: number, 
@@ -346,10 +371,13 @@ export async function generateReelsModule(
 ): Promise<ModuleContent> {
     const cacheKey = `${trail}_${level}_${index}`;
 
-    // Otmização de IA: primeira tentativa (failCount === 0) usa a trilha padrão, R$ 0 de custo
+    // Primeiro acesso: nenhuma chamada de IA. Servimos a variante que já provou
+    // ensinar melhor (promovida por acertos de alunos anteriores) ou, na falta
+    // dela, o conteúdo padrão do app. Em ambos os casos, custo zero.
     if (failCount === 0) {
-        console.log("Serving standard pre-defined module for first attempt:", cacheKey);
-        return getStandardModuleContent(index, level);
+        const promoted = await fetchPromotedVariant(trail, index, level);
+        if (promoted) return promoted;
+        return await getStandardModuleContent(index, level);
     }
 
     // Check if we have it in cache first (apenas para tentativas de reestudo já geradas)
@@ -385,7 +413,7 @@ export async function generateReelsModule(
         const slides: Slide[] = await Promise.all(
             data.slideTexts.map(async (text: string, i: number) => ({
                 text,
-                imageUrl: await generateImageForSlide(data.imagePrompts[i] || text)
+                imageUrl: await imageForSlide(index, i)
             }))
         );
 
@@ -396,7 +424,8 @@ export async function generateReelsModule(
             options: data.options,
             feedbackCorrect: data.feedbackCorrect,
             feedbackWrong: data.feedbackWrong,
-            variationId: data.variationId
+            variationId: data.variationId,
+            variantId: data.variantId ?? undefined
         };
 
         // Store in cache for future offline use
@@ -446,10 +475,9 @@ export async function generateReelsModule(
         // Use failCount in the index to guarantee variation if they retry
         const selectedIntro = introTexts[(index + failCount) % introTexts.length];
 
-        const fallbackImages = [0, 1, 2].map((slideIndex) => {
-            const imgId = FALLBACK_IMAGE_POOLS[(topicIndex * 3 + slideIndex) % FALLBACK_IMAGE_POOLS.length];
-            return `https://images.unsplash.com/${imgId}?q=80&w=600&t=${Date.now() + slideIndex}`;
-        });
+        const fallbackImages = await Promise.all(
+            [0, 1, 2].map((slideIndex) => imageForSlide(index, slideIndex))
+        );
 
         const fallbackSlides = [
             { text: `Módulo #${index + 1}: ${selectedIntro} Fique atento aos detalhes técnicos abaixo.`, imageUrl: fallbackImages[0] },

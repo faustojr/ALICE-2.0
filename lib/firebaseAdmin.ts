@@ -74,4 +74,6 @@ export const COLLECTIONS = {
   trails: 'trails',
   aiUsage: 'aiUsage',
   leads: 'leads',
+  moduleVariants: 'moduleVariants',
+  reelImages: 'reelImages',
 } as const;

@@ -24,7 +24,7 @@ import {
 import { generateReelsModule } from '../services/geminiService';
 import type { ModuleContent, UserState } from '../types';
 import { auth } from '../firebase';
-import { fetchProgress, saveProgress, submitSurvey } from '../services/studentApi';
+import { fetchProgress, reportQuizResult, saveProgress, submitSurvey } from '../services/studentApi';
 
 const LazyImage: React.FC<{ src: string, alt: string, opacity: number, priority?: boolean }> = ({ src, alt, opacity, priority }) => {
   const [isIntersecting, setIntersecting] = useState(priority);
@@ -473,7 +473,17 @@ const MicrolearningFeed: React.FC<{
     if (quizAnswered) return; // Prevent double answer
     setSelectedOption(value);
     setQuizAnswered(true);
-    
+
+    // Reporta o resultado à variante servida. É o que permite promover a
+    // conteúdo padrão uma explicação gerada pela IA que levou alunos ao
+    // acerto — e o que faz cada geração ser paga uma vez só.
+    const email = auth.currentUser?.email;
+    if (email && currentModule?.variantId) {
+      reportQuizResult(email, currentModule.variantId, value === 'correct').catch(
+        (err) => console.error('Falha ao reportar resultado do quiz:', err)
+      );
+    }
+
     if (value === 'correct') {
       setUserState(prev => {
         const newCorrectCount = { ...prev.correctQuizzesCount };

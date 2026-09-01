@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// ============================================================================
+// ALICE 2.0 — Regras do Firebase Storage
+//
+// O único conteúdo aqui é o acervo de fundos dos reels: imagens de licença
+// livre, públicas por natureza. A escrita passa pelo Admin SDK (o script de
+// carga), que ignora estas regras — então nada precisa ser liberado.
+// ============================================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Fundos dos reels: leitura pública, escrita só pelo servidor.
+    match /reel-images/{imageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Default: nega. Um caminho novo não nasce aberto.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
