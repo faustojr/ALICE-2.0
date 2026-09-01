@@ -121,3 +121,47 @@ export function formatBRL(cents: number): string {
     maximumFractionDigits: 0,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Auditoria de variantes de conteúdo
+// ---------------------------------------------------------------------------
+
+export interface AdminVariant {
+  id: string;
+  moduleKey: string;
+  trail: string;
+  level: string;
+  moduleIndex: number;
+  status: 'CANDIDATE' | 'PROMOTED' | 'REJECTED';
+  origin: string;
+  tenantId: string | null;
+  title: string;
+  question: string;
+  slideTexts: string[];
+  options: { label: string; value: string }[];
+  feedbackCorrect: string;
+  stats: {
+    served: number;
+    correct: number;
+    wrong: number;
+    distinctCorrect: number;
+    successRate: number | null;
+  };
+  createdAt: string;
+  promotedAt: string | null;
+}
+
+export function fetchVariants(status?: string): Promise<{ variants: AdminVariant[] }> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  return request<{ variants: AdminVariant[] }>(`/api/admin/variants${query}`);
+}
+
+export function setVariantStatus(
+  id: string,
+  status: 'PROMOTED' | 'REJECTED'
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/admin/variants?id=${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+}

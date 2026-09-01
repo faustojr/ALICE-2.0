@@ -14,6 +14,7 @@ import {
   listTenants,
   refreshTenantStats,
   updateTenant,
+  upsertMembership,
 } from '../../lib/repositories.js';
 import { PLANS, type AuthMode, type PlanId, type TenantStatus } from '../../types.js';
 
@@ -95,7 +96,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         trialEndsAt: trialEnd.toISOString(),
       });
 
-      return res.status(201).json({ tenant });
+      // O responsável vira TENANT_ADMIN junto com o cadastro. Sem esse
+      // vínculo o painel do gestor recusa o acesso dele, e a prefeitura
+      // recém-cadastrada ficaria sem quem acompanhe o piloto.
+      let managerLinked = false;
+      try {
+        await upsertMembership(tenant.id, contact.email, 'TENANT_ADMIN', {
+          role: 'TENANT_ADMIN',
+          status: 'ATIVO',
+          invitedAt: now.toISOString(),
+        });
+        managerLinked = true;
+      } catch (err) {
+        console.error('[tenants] falha ao vincular o gestor', err);
+      }
+
+      return res.status(201).json({ tenant, managerLinked });
     }
 
     if (req.method === 'PATCH') {

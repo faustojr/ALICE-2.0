@@ -1,0 +1,49 @@
+name: CI
+
+# Portão de qualidade do repositório. Antes disso, `lint` e `build` só rodavam
+# na máquina de quem lembrasse de rodá-los.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verificar:
+    name: Typecheck e build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build de produção
+        run: npm run build
+        env:
+          # O build precisa das variáveis VITE_*, mas nenhuma delas é segredo:
+          # a config do Firebase é pública por natureza (fica no bundle) e o
+          # que protege o banco são as regras de segurança, não o sigilo da
+          # chave. Valores fictícios bastam para o build compilar.
+          VITE_FIREBASE_API_KEY: ci-build-placeholder
+          VITE_FIREBASE_AUTH_DOMAIN: ci.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: ci-build
+          VITE_FIREBASE_STORAGE_BUCKET: ci.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+          VITE_FIREBASE_APP_ID: '1:000000000000:web:ci'
+
+      - name: Verificar se algum segredo foi commitado
+        run: |
+          if git ls-files | grep -E '(service-account|credentials|keyfile).*\.json$|^\.env$|^\.env\.(local|production)$'; then
+            echo "::error::Arquivo de credencial versionado. Remova antes de seguir."
+            exit 1
+          fi
+          echo "Nenhum arquivo de credencial versionado."

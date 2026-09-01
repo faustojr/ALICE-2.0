@@ -25,6 +25,7 @@ const ROUTES: { path: string; module: string }[] = [
   { path: '/api/manager/overview', module: './api/manager/overview.ts' },
   { path: '/api/admin/tenants', module: './api/admin/tenants.ts' },
   { path: '/api/admin/overview', module: './api/admin/overview.ts' },
+  { path: '/api/admin/variants', module: './api/admin/variants.ts' },
 ];
 
 async function startServer() {

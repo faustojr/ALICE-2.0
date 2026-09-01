@@ -20,15 +20,21 @@ import {
   ShieldAlert,
   ArrowLeft,
   X,
+  FileText,
+  ThumbsDown,
+  Building,
 } from 'lucide-react';
 import {
   AdminApiError,
   createTenant,
   fetchOverview,
   fetchTenants,
+  fetchVariants,
   formatBRL,
+  setVariantStatus,
   updateTenant,
   type AdminOverview,
+  type AdminVariant,
 } from '../services/adminApi';
 import { auth, googleProvider, signInWithPopup, isVerifiedSession } from '../firebase';
 import { PLANS, type PlanId, type Tenant, type TenantStatus } from '../types';
@@ -260,6 +266,252 @@ const NewTenantModal: React.FC<{
 
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+
+const STATUS_LABEL: Record<string, string> = {
+  PROMOTED: 'Em uso',
+  CANDIDATE: 'Candidata',
+  REJECTED: 'Rejeitada',
+};
+
+const VARIANT_STATUS_STYLES: Record<string, string> = {
+  PROMOTED: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  CANDIDATE: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+  REJECTED: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+};
+
+/**
+ * Auditoria do conteúdo gerado por IA.
+ *
+ * A promoção é automática após três alunos distintos acertarem. Com três
+ * alternativas por quiz, isso acontece por acaso em cerca de 3,7% dos casos,
+ * e nenhum texto passou por revisão jurídica antes de virar padrão. Esta tela
+ * é o contrapeso: mostra o que está em uso e permite tirar do ar.
+ */
+const ContentAudit: React.FC = () => {
+  const [variants, setVariants] = useState<AdminVariant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string>('PROMOTED');
+  const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const load = useCallback(async (status: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await fetchVariants(status || undefined);
+      setVariants(data.variants);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao carregar variantes.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(filter);
+  }, [filter, load]);
+
+  const reject = async (variant: AdminVariant) => {
+    const previous = variants;
+    setVariants((list) => list.filter((v) => v.id !== variant.id));
+    try {
+      await setVariantStatus(variant.id, 'REJECTED');
+    } catch (err) {
+      setVariants(previous);
+      setError(err instanceof Error ? err.message : 'Falha ao rejeitar.');
+    }
+  };
+
+  const promote = async (variant: AdminVariant) => {
+    try {
+      await setVariantStatus(variant.id, 'PROMOTED');
+      load(filter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao promover.');
+    }
+  };
+
+  return (
+    <section>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-lg font-bold text-white">Conteúdo gerado por IA</h2>
+          <p className="text-slate-500 text-sm">
+            Promovido automaticamente após 3 acertos de alunos distintos.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {[
+            { id: 'PROMOTED', label: 'Em uso' },
+            { id: 'CANDIDATE', label: 'Candidatas' },
+            { id: 'REJECTED', label: 'Rejeitadas' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                filter === tab.id
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white/5 text-slate-400 hover:bg-white/10'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/25 rounded-2xl p-4 text-red-300 text-sm mb-4">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-12 text-center">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+        </div>
+      ) : variants.length === 0 ? (
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-12 text-center">
+          <FileText className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-400">
+            {filter === 'PROMOTED'
+              ? 'Nenhum conteúdo gerado por IA foi promovido ainda. Os alunos estão usando o conteúdo padrão.'
+              : 'Nada aqui.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {variants.map((v) => (
+            <div
+              key={v.id}
+              className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden"
+            >
+              <div className="p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${
+                          VARIANT_STATUS_STYLES[v.status]
+                        }`}
+                      >
+                        {STATUS_LABEL[v.status] ?? v.status}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Módulo {v.moduleIndex + 1} · {v.level}
+                      </span>
+                    </div>
+                    <h3 className="text-white font-bold">{v.title}</h3>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-sm shrink-0">
+                    <div className="text-right">
+                      <p className="text-white font-bold tabular-nums">
+                        {v.stats.successRate !== null ? `${v.stats.successRate}%` : '—'}
+                      </p>
+                      <p className="text-xs text-slate-500">acerto</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-white font-bold tabular-nums">
+                        {v.stats.distinctCorrect}
+                      </p>
+                      <p className="text-xs text-slate-500">alunos</p>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-slate-400 text-sm mb-3">{v.question}</p>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setExpanded(expanded === v.id ? null : v.id)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors"
+                  >
+                    {expanded === v.id ? 'Ocultar conteúdo' : 'Ver conteúdo'}
+                  </button>
+
+                  {v.status === 'PROMOTED' && (
+                    <button
+                      onClick={() => reject(v)}
+                      className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                    >
+                      <ThumbsDown className="w-3.5 h-3.5" />
+                      Tirar do ar
+                    </button>
+                  )}
+
+                  {v.status !== 'PROMOTED' && (
+                    <button
+                      onClick={() => promote(v)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs font-semibold transition-colors"
+                    >
+                      Colocar em uso
+                    </button>
+                  )}
+
+                  {v.tenantId && (
+                    <span className="text-xs text-slate-600 flex items-center gap-1">
+                      <Building className="w-3 h-3" />
+                      específico de uma prefeitura
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {expanded === v.id && (
+                <div className="border-t border-white/10 bg-black/20 p-5 space-y-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                      Slides
+                    </p>
+                    <ol className="space-y-2">
+                      {v.slideTexts.map((text, i) => (
+                        <li key={i} className="text-sm text-slate-300 flex gap-3">
+                          <span className="text-slate-600 shrink-0">{i + 1}.</span>
+                          <span>{text}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                      Alternativas
+                    </p>
+                    <ul className="space-y-1.5">
+                      {v.options.map((opt, i) => (
+                        <li
+                          key={i}
+                          className={`text-sm flex gap-2 ${
+                            opt.value === 'correct' ? 'text-emerald-300' : 'text-slate-400'
+                          }`}
+                        >
+                          <span>{opt.value === 'correct' ? '✓' : '·'}</span>
+                          <span>{opt.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                      Feedback do acerto
+                    </p>
+                    <p className="text-sm text-slate-300">{v.feedbackCorrect}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
 const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -268,6 +520,7 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [error, setError] = useState<{ message: string; status: number } | null>(null);
   const [search, setSearch] = useState('');
   const [showNewTenant, setShowNewTenant] = useState(false);
+  const [tab, setTab] = useState<'OPERACAO' | 'CONTEUDO'>('OPERACAO');
 
   const load = useCallback(async (refreshStats = false) => {
     setError(null);
@@ -449,6 +702,29 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
         )}
 
+        <div className="flex gap-1 border-b border-white/10">
+          {[
+            { id: 'OPERACAO' as const, label: 'Operação' },
+            { id: 'CONTEUDO' as const, label: 'Conteúdo' },
+          ].map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-5 py-3 font-semibold text-sm border-b-2 -mb-px transition-colors ${
+                tab === t.id
+                  ? 'border-blue-500 text-blue-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'CONTEUDO' && <ContentAudit />}
+
+        {tab === 'OPERACAO' && (
+          <>
         {/* Indicadores */}
         {overview && (
           <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -646,7 +922,10 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           )}
         </section>
 
-        {overview && (
+          </>
+        )}
+
+        {overview && tab === 'OPERACAO' && (
           <p className="text-xs text-slate-600 text-center pb-8">
             Atualizado em {new Date(overview.generatedAt).toLocaleString('pt-BR')}
           </p>
