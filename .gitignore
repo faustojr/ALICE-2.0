@@ -30,6 +30,10 @@ dist-ssr
 !.vscode/extensions.json
 !.claude/**/*.json
 
+# Configuração pessoal do Claude Code: permissões aprovadas nesta máquina.
+# O settings.json do projeto é versionado; o .local não.
+.claude/settings.local.json
+
 *service-account*.json
 *credentials*.json
 *keyfile*.json
