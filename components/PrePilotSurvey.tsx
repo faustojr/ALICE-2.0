@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Star, CheckCircle2, Loader2, ChevronRight, ChevronLeft, ArrowLeft } from 'lucide-react';
 import { useAccessibility } from '../App';
-import { db, auth } from '../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { auth } from '../firebase';
+import { submitSurvey } from '../services/studentApi';
 
 interface PrePilotSurveyProps {
   onComplete: () => void;
@@ -154,32 +154,33 @@ const PrePilotSurvey: React.FC<PrePilotSurveyProps> = ({ onComplete, onBack }) =
         timestampPre: new Date().toISOString(),
       }));
 
-      try {
-        // 1. Salva na coleção pilotSurveys com dados prévios
-        await setDoc(doc(db, 'pilotSurveys', emailLower), {
-          email: emailLower,
+      // Envia pela API, que grava a pesquisa e atualiza o status do usuário
+      // numa transação só. O Firestore não aceita mais escrita do navegador.
+      const result = await submitSurvey(
+        emailLower,
+        'pre',
+        {
           pre_experienceTime: answers.pre_experienceTime,
           pre_formalCapacitation: answers.pre_formalCapacitation,
           pre_generalKnowledge: Number(answers.pre_generalKnowledge),
           pre_prepKnowledge: Number(answers.pre_prepKnowledge),
           pre_confidenceBasic: Number(answers.pre_confidenceBasic),
           pre_interestCustomTool: Number(answers.pre_interestCustomTool),
-          timestampPre: new Date().toISOString(),
-        }, { merge: true });
+        },
+        user.displayName || undefined
+      );
 
-        // 2. Atualiza dados do usuário para status correspondente 'ativo'
-        await setDoc(doc(db, 'users', emailLower), {
-          pilotStatus: 'ativo',
-          status: 'ativo',
-          email: emailLower,
-          name: user.displayName || emailLower.split('@')[0],
-          lastAccess: new Date().toISOString()
-        }, { merge: true });
-        
-        console.log("Salvo no Firestore com sucesso.");
-      } catch (dbErr: any) {
-        console.warn("Falha de gravação no Firebase durante o pré-piloto. Salvando localmente de forma resiliente.");
-        console.error("Erro original do Firebase:", dbErr);
+      if (!result.synced) {
+        // Sem conexão a resposta fica na fila e é reenviada sozinha; o aluno
+        // segue para o estudo. Uma recusa do servidor, essa sim, precisa
+        // aparecer — antes o erro era engolido e a resposta se perdia.
+        if (result.queued) {
+          console.warn('Pesquisa pré-uso enfileirada para reenvio:', result.error);
+        } else {
+          setErrorMsg(result.error || 'Não foi possível registrar suas respostas. Tente novamente.');
+          setSubmitting(false);
+          return;
+        }
       }
 
       // 3. Sincroniza o progresso local de status

@@ -23,8 +23,8 @@ import {
 } from 'lucide-react';
 import { generateReelsModule } from '../services/geminiService';
 import type { ModuleContent, UserState } from '../types';
-import { db, auth } from '../firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth } from '../firebase';
+import { fetchProgress, saveProgress, submitSurvey } from '../services/studentApi';
 
 const LazyImage: React.FC<{ src: string, alt: string, opacity: number, priority?: boolean }> = ({ src, alt, opacity, priority }) => {
   const [isIntersecting, setIntersecting] = useState(priority);
@@ -153,19 +153,17 @@ const MicrolearningFeed: React.FC<{
     }
 
     try {
-      // 2. Salvar no Firestore na coleção 'pilotSurveys'
-      await setDoc(doc(db, 'pilotSurveys', emailKey), {
-        email: emailKey,
-        ...surveyAnswers,
-        timestamp: new Date().toISOString()
-      }, { merge: true });
+      // 2. Envia pela API, que grava a pesquisa e marca o piloto como concluído.
+      const result = await submitSurvey(
+        emailKey,
+        'post',
+        surveyAnswers,
+        user.displayName || undefined
+      );
 
-      // 3. Salvar status no Firestore na coleção 'users'
-      await setDoc(doc(db, 'users', emailKey), {
-        pilotStatus: 'completed',
-        status: 'completed',
-        lastAccess: new Date().toISOString()
-      }, { merge: true });
+      if (!result.synced && !result.queued) {
+        throw new Error(result.error || 'Falha ao registrar a pesquisa.');
+      }
 
       // 4. Atualizar estado local de progresso do usuário
       setUserState(prev => ({
@@ -220,9 +218,9 @@ const MicrolearningFeed: React.FC<{
       if (user && user.email) {
         try {
           const emailKey = user.email.toLowerCase();
-          const userDoc = await getDoc(doc(db, 'users', emailKey));
-          if (userDoc.exists()) {
-            const data = userDoc.data();
+          const remote = await fetchProgress(emailKey);
+          const data = remote?.user;
+          if (data) {
             setUserState(prev => {
               const updated = {
                 ...prev,
@@ -277,37 +275,30 @@ const MicrolearningFeed: React.FC<{
 
     const saveRemote = async (stateToSave = userState) => {
       const user = auth.currentUser;
-      if (user && user.email) {
-        try {
-          const emailKey = user.email.toLowerCase();
-          await setDoc(doc(db, 'users', emailKey), {
-            email: emailKey,
-            name: user.displayName || `Aluno ${initialLevel}`,
-            points: stateToSave.points,
-            currentLevel: stateToSave.currentLevel,
-            currentModuleIndex: stateToSave.currentModuleIndex,
-            currentSlideIndex: stateToSave.currentSlideIndex,
-            highestModuleIndex: stateToSave.highestModuleIndex,
-            correctQuizzesCount: stateToSave.correctQuizzesCount,
-            quizCount: stateToSave.quizCount,
-            completedQuizzes: stateToSave.completedQuizzes || [],
-            lastStudyDate: stateToSave.lastStudyDate || null,
-            streakDays: stateToSave.streakDays || 1,
-            feedbackNeeded: stateToSave.feedbackNeeded || false,
-            pilotStatus: stateToSave.pilotStatus || 'active',
-            area: 'Geral',
-            bestTopic: 'Lei 14.133',
-            softSkillsLevel: stateToSave.points >= 3000 ? 'Especialista' : 'Básico',
-            lastAccess: new Date().toISOString()
-          }, { merge: true });
-        } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
-          if (errMsg.toLowerCase().includes('offline')) {
-            console.log("Firestore está offline. Sincronização em cache local.");
-          } else {
-            console.error("Erro ao sincronizar com Firestore:", e);
-          }
-        }
+      if (!user?.email) return;
+
+      const emailKey = user.email.toLowerCase();
+      const result = await saveProgress(emailKey, {
+        name: user.displayName || `Aluno ${initialLevel}`,
+        points: stateToSave.points,
+        currentLevel: stateToSave.currentLevel,
+        currentModuleIndex: stateToSave.currentModuleIndex,
+        currentSlideIndex: stateToSave.currentSlideIndex,
+        highestModuleIndex: stateToSave.highestModuleIndex,
+        correctQuizzesCount: stateToSave.correctQuizzesCount,
+        quizCount: stateToSave.quizCount,
+        completedQuizzes: stateToSave.completedQuizzes || [],
+        lastStudyDate: stateToSave.lastStudyDate || null,
+        streakDays: stateToSave.streakDays || 1,
+        feedbackNeeded: stateToSave.feedbackNeeded || false,
+        currentTrail: stateToSave.currentTrail,
+        hasTestedReels: stateToSave.hasTestedReels,
+      });
+
+      // Falha de rede vai para a fila e é reenviada quando a conexão volta;
+      // não vale interromper o estudo por isso.
+      if (!result.synced && !result.queued) {
+        console.error('Progresso recusado pelo servidor:', result.error);
       }
     };
 

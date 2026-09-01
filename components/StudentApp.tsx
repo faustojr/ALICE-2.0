@@ -4,8 +4,8 @@ import RoleSelector from './RoleSelector';
 import MicrolearningFeed from './MicrolearningFeed';
 import PrePilotSurvey from './PrePilotSurvey';
 import { Trophy, ClipboardList, CheckCircle } from 'lucide-react';
-import { auth, db, onAuthStateChanged } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { auth, onAuthStateChanged } from '../firebase';
+import { fetchSurveyStatus } from '../services/studentApi';
 import { useAccessibility } from '../App';
 
 // O painel do gestor só é baixado por quem realmente abre o painel.
@@ -17,6 +17,51 @@ const Dashboard = lazy(() => import('./Dashboard'));
  * Vive fora do App.tsx para que a landing page e o console administrativo
  * não carreguem o SDK do Firebase nem o feed de microaprendizagem.
  */
+/**
+ * Estado das pesquisas a partir do cache local, para quando a API não
+ * responde. Sem isto o aluno offline veria o passo 1 desbloqueado de novo e
+ * responderia a pesquisa duas vezes.
+ */
+function readCachedSurveyStatus(emailKey: string): {
+  preCompleted: boolean;
+  postCompleted: boolean;
+} {
+  try {
+    const cachedSurvey = localStorage.getItem(`pilotSurveys_${emailKey}`);
+    if (cachedSurvey) {
+      const data = JSON.parse(cachedSurvey);
+      return {
+        preCompleted:
+          data.pre_generalKnowledge !== undefined ||
+          data.pre_tempoAtuacao !== undefined ||
+          data.pre_experienceTime !== undefined ||
+          data.timestampPre !== undefined,
+        postCompleted:
+          data.pos_daysUsed !== undefined ||
+          data.pos_generalKnowledge !== undefined ||
+          data.timestamp !== undefined,
+      };
+    }
+
+    const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`);
+    if (activeProgress) {
+      const parsed = JSON.parse(activeProgress);
+      const started =
+        parsed.status === 'ativo' ||
+        parsed.pilotStatus === 'ativo' ||
+        parsed.pilotStatus === 'completed';
+      return {
+        preCompleted: started,
+        postCompleted: parsed.pilotStatus === 'completed',
+      };
+    }
+  } catch {
+    // Cache ilegível equivale a cache ausente.
+  }
+
+  return { preCompleted: false, postCompleted: false };
+}
+
 const StudentApp: React.FC = () => {
   const [role, setRole] = useState<UserRole | null>(null);
   const [view, setView] = useState<'MAIN' | 'REELS' | 'CHAT' | 'LEVEL_SELECT' | 'PRE_SURVEY'>('MAIN');
@@ -35,67 +80,17 @@ const StudentApp: React.FC = () => {
     if (!user || !user.email) return;
     try {
       const emailKey = user.email.toLowerCase();
-      let surveyExists = false;
-      let data: any = null;
 
-      try {
-        const surveyDocRef = doc(db, 'pilotSurveys', emailKey);
-        const surveyDocSnapshot = await getDoc(surveyDocRef);
-        if (surveyDocSnapshot.exists()) {
-          surveyExists = true;
-          data = surveyDocSnapshot.data();
-        }
-      } catch (dbErr: any) {
-        const isOffline = dbErr instanceof Error && dbErr.message.toLowerCase().includes('offline');
-        if (isOffline) {
-          console.log("Firestore está offline ao verificar questionário. Verificando no localStorage.");
-          const cachedSurvey = localStorage.getItem(`pilotSurveys_${emailKey}`);
-          if (cachedSurvey) {
-            try {
-              data = JSON.parse(cachedSurvey);
-              surveyExists = true;
-            } catch (jsonErr) {}
-          } else {
-            // Se não há cache, mas estamos offline no piloto, podemos verificar se salvamos status de outras formas
-            const activeProgress = localStorage.getItem(`alice_progress_v3_${emailKey}`);
-            if (activeProgress) {
-              try {
-                const parsed = JSON.parse(activeProgress);
-                if (parsed.status === 'ativo' || parsed.pilotStatus === 'ativo' || parsed.pilotStatus === 'completed') {
-                  surveyExists = true;
-                  data = { 
-                    pre_generalKnowledge: 5,
-                    ...(parsed.pilotStatus === 'completed' ? { pos_daysUsed: 5 } : {})
-                  };
-                }
-              } catch (jsonErr) {}
-            }
-          }
-        } else {
-          console.warn("Erro ao ler documento de pesquisa do Firestore:", dbErr);
-        }
-      }
-      
-      if (surveyExists && data) {
-        // Validação da Pesquisa Pré-Uso
-        const preCompleted = (
-          data.pre_generalKnowledge !== undefined || 
-          data.pre_tempoAtuacao !== undefined || 
-          data.pre_experienceTime !== undefined ||
-          data.timestampPre !== undefined
-        );
-        setHasPreSurveyCompleted(preCompleted);
+      // A API é a fonte de verdade; o localStorage cobre o caso offline.
+      const status = await fetchSurveyStatus(emailKey);
 
-        // Validação da Pesquisa de Pós-Uso / Encerramento
-        const postCompleted = (
-          data.pos_daysUsed !== undefined ||
-          data.pos_generalKnowledge !== undefined ||
-          data.timestamp !== undefined
-        );
-        setHasPostSurveyCompleted(postCompleted);
+      if (status) {
+        setHasPreSurveyCompleted(status.preCompleted);
+        setHasPostSurveyCompleted(status.postCompleted);
       } else {
-        setHasPreSurveyCompleted(false);
-        setHasPostSurveyCompleted(false);
+        const cached = readCachedSurveyStatus(emailKey);
+        setHasPreSurveyCompleted(cached.preCompleted);
+        setHasPostSurveyCompleted(cached.postCompleted);
       }
 
       // Verificar se testou os reels e respondeu um quiz
