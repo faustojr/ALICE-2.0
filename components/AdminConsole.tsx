@@ -45,6 +45,9 @@ import {
 import { auth, googleProvider, signInWithPopup, isVerifiedSession } from '../firebase';
 import { PLANS, type PlanId, type Tenant, type TenantStatus } from '../types';
 
+// Sob demanda: quem abre a operação não precisa baixar a tela de cobrança.
+const BillingPanel = React.lazy(() => import('./admin/BillingPanel'));
+
 const UF_LIST = [
   'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB',
   'PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO',
@@ -719,7 +722,7 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [error, setError] = useState<{ message: string; status: number } | null>(null);
   const [search, setSearch] = useState('');
   const [showNewTenant, setShowNewTenant] = useState(false);
-  const [tab, setTab] = useState<'OPERACAO' | 'CONTEUDO' | 'TRILHAS'>('OPERACAO');
+  const [tab, setTab] = useState<'OPERACAO' | 'COBRANCA' | 'CONTEUDO' | 'TRILHAS'>('OPERACAO');
 
   const load = useCallback(async (refreshStats = false) => {
     setError(null);
@@ -904,6 +907,7 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div className="flex gap-1 border-b border-white/10">
           {[
             { id: 'OPERACAO' as const, label: 'Operação' },
+            { id: 'COBRANCA' as const, label: 'Cobrança' },
             { id: 'TRILHAS' as const, label: 'Trilhas' },
             { id: 'CONTEUDO' as const, label: 'Conteúdo' },
           ].map((t) => (
@@ -920,6 +924,18 @@ const AdminConsole: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             </button>
           ))}
         </div>
+
+        {tab === 'COBRANCA' && (
+          <React.Suspense
+            fallback={
+              <div className="p-12 text-center">
+                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+              </div>
+            }
+          >
+            <BillingPanel tenants={tenants} />
+          </React.Suspense>
+        )}
 
         {tab === 'TRILHAS' && <TrailsPanel />}
 

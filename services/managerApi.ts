@@ -106,3 +106,135 @@ export async function fetchManagerOverview(tenantId?: string): Promise<ManagerOv
 
   return payload as ManagerOverview;
 }
+
+// ---------------------------------------------------------------------------
+// Grupos (secretarias)
+// ---------------------------------------------------------------------------
+
+export interface ManagerGroup {
+  id: string;
+  tenantId: string;
+  slug: string;
+  name: string;
+  description?: string;
+  assignedTrails: string[];
+  stats?: { members: number; activeMembers30d: number; averagePoints: number };
+}
+
+export interface GroupMember {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  groupId: string | null;
+  lastAccessAt: string | null;
+}
+
+async function managerRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = await getIdToken();
+  if (!token) {
+    throw new ManagerApiError('Esta área exige login com Google.', 401);
+  }
+
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...init.headers,
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ManagerApiError(
+      payload.error || `Falha na requisição (${response.status}).`,
+      response.status
+    );
+  }
+  return payload as T;
+}
+
+export function fetchGroups(refresh = false): Promise<{
+  groups: ManagerGroup[];
+  members: GroupMember[];
+  ungrouped: number;
+}> {
+  return managerRequest(`/api/manager/groups${refresh ? '?refresh=true' : ''}`);
+}
+
+export function createGroup(name: string, description?: string) {
+  return managerRequest<{ group: ManagerGroup }>('/api/manager/groups', {
+    method: 'POST',
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export function assignMember(membershipId: string, groupId: string | null) {
+  return managerRequest<{ ok: boolean }>('/api/manager/groups?action=assign', {
+    method: 'PATCH',
+    body: JSON.stringify({ membershipId, groupId }),
+  });
+}
+
+export function deleteGroup(id: string) {
+  return managerRequest<{ ok: boolean }>(
+    `/api/manager/groups?id=${encodeURIComponent(id)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Conteúdo próprio da prefeitura
+// ---------------------------------------------------------------------------
+
+export interface DraftContent {
+  title: string;
+  slideTexts: string[];
+  question: string;
+  options: { label: string; value: string }[];
+  feedbackCorrect: string;
+  feedbackWrong: string;
+}
+
+export interface ManagerTopic {
+  id: string;
+  title: string;
+  legalReference: string | null;
+  status: 'PUBLICADO' | 'AGUARDANDO_APROVACAO' | 'SEM_CONTEUDO';
+  draft: DraftContent | null;
+  published: DraftContent | null;
+}
+
+export function fetchOwnContent(): Promise<{
+  trail: { slug: string; name: string; isPublished: boolean } | null;
+  topics: ManagerTopic[];
+  pendingApproval: number;
+}> {
+  return managerRequest('/api/manager/content');
+}
+
+export function addTopic(title: string, legalReference?: string) {
+  return managerRequest<{ ok: boolean; topicId: string }>(
+    '/api/manager/content?action=topic',
+    { method: 'POST', body: JSON.stringify({ title, legalReference }) }
+  );
+}
+
+export function generateTopicContent(topicId: string) {
+  return managerRequest<{ ok: boolean; draft: DraftContent }>(
+    '/api/manager/content?action=generate',
+    { method: 'PATCH', body: JSON.stringify({ topicId }) }
+  );
+}
+
+export function approveTopic(
+  topicId: string,
+  approved: boolean,
+  content?: DraftContent
+) {
+  return managerRequest<{ ok: boolean; approved: boolean }>(
+    '/api/manager/content?action=approve',
+    { method: 'PATCH', body: JSON.stringify({ topicId, approved, content }) }
+  );
+}

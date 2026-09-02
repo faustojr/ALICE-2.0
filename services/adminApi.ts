@@ -205,3 +205,56 @@ export function updateTrail(
     body: JSON.stringify(patch),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Contratos e faturas
+// ---------------------------------------------------------------------------
+
+export interface AdminInvoice {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  contractId: string;
+  reference: string;
+  amountCents: number;
+  status: 'PREVISTA' | 'EMITIDA' | 'PAGA' | 'VENCIDA' | 'CANCELADA';
+  dueDate: string;
+  issuedAt?: string;
+  paidAt?: string;
+  invoiceNumber?: string;
+  daysOverdue: number;
+}
+
+export interface BillingOverview {
+  markedOverdue: number;
+  summary: {
+    receivedThisYearCents: number;
+    openCents: number;
+    overdueCents: number;
+    overdueCount: number;
+    toIssueCount: number;
+  };
+  invoices: AdminInvoice[];
+}
+
+export function fetchBilling(): Promise<BillingOverview> {
+  return request<BillingOverview>('/api/admin/billing');
+}
+
+export function createContract(input: Record<string, unknown>) {
+  return request<{ contract: unknown; invoicesCreated: number }>(
+    '/api/admin/billing?action=contract',
+    { method: 'POST', body: JSON.stringify(input) }
+  );
+}
+
+export function setInvoiceStatus(
+  id: string,
+  status: AdminInvoice['status'],
+  extra: Record<string, unknown> = {}
+) {
+  return request<{ ok: boolean }>(
+    `/api/admin/billing?action=invoice&id=${encodeURIComponent(id)}`,
+    { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }
+  );
+}

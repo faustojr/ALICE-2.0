@@ -13,6 +13,10 @@ import {
   type ManagerSurvey,
 } from '../services/managerApi';
 
+// Carregados sob demanda: quem só olha a visão geral não baixa as duas telas.
+const GroupsPanel = React.lazy(() => import('./manager/GroupsPanel'));
+const ContentPanel = React.lazy(() => import('./manager/ContentPanel'));
+
 interface DashboardProps {
   onBack: () => void;
 }
@@ -465,7 +469,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [surveyData, setSurveyData] = useState<ManagerSurvey[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [accessError, setAccessError] = useState<{ message: string; status: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'PILOT'>('OVERVIEW');
+  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'PILOT' | 'TURMAS' | 'CONTEUDO'>('OVERVIEW');
   
   // Modals state
   const [showAssessmentModal, setShowAssessmentModal] = useState(false);
@@ -660,7 +664,41 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
         >
           Resultados do Piloto
         </button>
+        <button 
+          onClick={() => setActiveTab('TURMAS')}
+          className={`py-2.5 px-4 font-bold text-sm border-b-2 transition-all ${
+            activeTab === 'TURMAS' 
+              ? 'border-blue-500 text-blue-400' 
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          id="btn-tab-turmas"
+        >
+          Turmas
+        </button>
+        <button 
+          onClick={() => setActiveTab('CONTEUDO')}
+          className={`py-2.5 px-4 font-bold text-sm border-b-2 transition-all ${
+            activeTab === 'CONTEUDO' 
+              ? 'border-blue-500 text-blue-400' 
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          id="btn-tab-conteudo"
+        >
+          Conteúdo
+        </button>
       </div>
+
+      {(activeTab === 'TURMAS' || activeTab === 'CONTEUDO') && (
+        <React.Suspense
+          fallback={
+            <div className="p-12 text-center">
+              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          }
+        >
+          {activeTab === 'TURMAS' ? <GroupsPanel /> : <ContentPanel />}
+        </React.Suspense>
+      )}
       
       {activeTab === 'OVERVIEW' ? (
         <>
@@ -760,11 +798,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
              </button>
           </div>
         </>
-      ) : (
+      ) : activeTab === 'PILOT' ? (
         <div className="flex-grow overflow-y-auto">
           <PilotResultsPanel users={serverData as any} surveys={surveyData} loading={isLoading} />
         </div>
-      )}
+      ) : null}
     </div>
   );
 };
