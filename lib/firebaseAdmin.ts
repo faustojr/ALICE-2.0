@@ -76,4 +76,8 @@ export const COLLECTIONS = {
   leads: 'leads',
   moduleVariants: 'moduleVariants',
   reelImages: 'reelImages',
+  groups: 'groups',
+  contracts: 'contracts',
+  invoices: 'invoices',
+  lawArticles: 'lawArticles',
 } as const;

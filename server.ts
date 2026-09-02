@@ -20,14 +20,18 @@ const ROUTES: { path: string; module: string }[] = [
   { path: '/api/surveys', module: './api/surveys.ts' },
   { path: '/api/module', module: './api/module.ts' },
   { path: '/api/trails', module: './api/trails.ts' },
+  { path: '/api/law', module: './api/law.ts' },
   { path: '/api/quizResult', module: './api/quizResult.ts' },
   { path: '/api/reelImages', module: './api/reelImages.ts' },
   { path: '/api/leads', module: './api/leads.ts' },
   { path: '/api/manager/overview', module: './api/manager/overview.ts' },
+  { path: '/api/manager/groups', module: './api/manager/groups.ts' },
+  { path: '/api/manager/content', module: './api/manager/content.ts' },
   { path: '/api/admin/tenants', module: './api/admin/tenants.ts' },
   { path: '/api/admin/overview', module: './api/admin/overview.ts' },
   { path: '/api/admin/variants', module: './api/admin/variants.ts' },
   { path: '/api/admin/trails', module: './api/admin/trails.ts' },
+  { path: '/api/admin/billing', module: './api/admin/billing.ts' },
 ];
 
 async function startServer() {

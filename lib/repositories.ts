@@ -9,6 +9,11 @@ import {
   PLANS,
   PROMOTION_THRESHOLD,
   type AiUsageRecord,
+  type BillingSummary,
+  type Contract,
+  type Group,
+  type Invoice,
+  type LawArticle,
   type Membership,
   type ModuleVariant,
   type ReelImage,
@@ -287,6 +292,349 @@ export async function checkAiQuota(
   }
 
   return { allowed: true, used, limit };
+}
+
+// ---------------------------------------------------------------------------
+// Grupos (secretarias)
+// ---------------------------------------------------------------------------
+
+function slugifyName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+export async function listGroups(tenantId: string): Promise<Group[]> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.groups)
+    .where('tenantId', '==', tenantId)
+    .get();
+  return snap.docs.map((d) => d.data() as Group).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function createGroup(
+  tenantId: string,
+  name: string,
+  extra: Partial<Group> = {}
+): Promise<Group> {
+  const db = getDb();
+  const slug = slugifyName(name);
+  if (!slug) throw new Error('Nome de grupo inválido.');
+
+  const id = `${tenantId}__${slug}`;
+  const ref = db.collection(COLLECTIONS.groups).doc(id);
+
+  if ((await ref.get()).exists) {
+    throw new Error(`Já existe um grupo "${name}" nesta prefeitura.`);
+  }
+
+  const now = new Date().toISOString();
+  const group: Group = {
+    id,
+    tenantId,
+    slug,
+    name: name.trim().slice(0, 120),
+    description: extra.description,
+    assignedTrails: extra.assignedTrails ?? [],
+    stats: { members: 0, activeMembers30d: 0, averagePoints: 0 },
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await ref.set(group);
+  return group;
+}
+
+export async function updateGroup(id: string, patch: Partial<Group>): Promise<void> {
+  const db = getDb();
+  const { id: _id, tenantId: _t, createdAt: _c, ...safe } = patch;
+  await db
+    .collection(COLLECTIONS.groups)
+    .doc(id)
+    .update({ ...safe, updatedAt: new Date().toISOString() });
+}
+
+export async function deleteGroup(id: string): Promise<void> {
+  const db = getDb();
+  // Os membros perdem o vínculo mas continuam no tenant: apagar um grupo não
+  // pode remover servidores da prefeitura.
+  const members = await db
+    .collection(COLLECTIONS.memberships)
+    .where('groupId', '==', id)
+    .get();
+
+  const batch = db.batch();
+  members.docs.forEach((doc) => batch.update(doc.ref, { groupId: FieldValue.delete() }));
+  batch.delete(db.collection(COLLECTIONS.groups).doc(id));
+  await batch.commit();
+}
+
+export async function assignMemberToGroup(
+  membershipId: string,
+  groupId: string | null
+): Promise<void> {
+  const db = getDb();
+  await db
+    .collection(COLLECTIONS.memberships)
+    .doc(membershipId)
+    .update({ groupId: groupId ?? FieldValue.delete() });
+}
+
+/** Recalcula os contadores de cada grupo a partir dos membros e do progresso. */
+export async function refreshGroupStats(tenantId: string): Promise<void> {
+  const db = getDb();
+  const [groups, members, users] = await Promise.all([
+    listGroups(tenantId),
+    listTenantMembers(tenantId),
+    listTenantUsers(tenantId),
+  ]);
+
+  const byEmail = new Map(users.map((u: any) => [u.email, u]));
+  const cutoff = Date.now() - THIRTY_DAYS_MS;
+  const batch = db.batch();
+
+  for (const group of groups) {
+    const groupMembers = members.filter((m) => m.groupId === group.id);
+    const withProgress = groupMembers
+      .map((m) => byEmail.get(m.email))
+      .filter(Boolean) as any[];
+
+    const active = withProgress.filter(
+      (u) => u.lastAccess && Date.parse(u.lastAccess) > cutoff
+    ).length;
+    const points = withProgress.reduce((sum, u) => sum + (u.points || 0), 0);
+
+    batch.update(db.collection(COLLECTIONS.groups).doc(group.id), {
+      stats: {
+        members: groupMembers.length,
+        activeMembers30d: active,
+        averagePoints: withProgress.length ? Math.round(points / withProgress.length) : 0,
+      },
+    });
+  }
+
+  await batch.commit();
+}
+
+// ---------------------------------------------------------------------------
+// Contratos e faturas
+// ---------------------------------------------------------------------------
+
+export async function getContract(tenantId: string): Promise<Contract | null> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.contracts)
+    .where('tenantId', '==', tenantId)
+    .where('status', 'in', ['ATIVO', 'EM_NEGOCIACAO'])
+    .limit(1)
+    .get();
+  return snap.empty ? null : (snap.docs[0].data() as Contract);
+}
+
+export async function upsertContract(
+  input: Omit<Contract, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+): Promise<Contract> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const ref = input.id
+    ? db.collection(COLLECTIONS.contracts).doc(input.id)
+    : db.collection(COLLECTIONS.contracts).doc();
+
+  const existing = input.id ? await ref.get() : null;
+  const contract: Contract = {
+    ...input,
+    id: ref.id,
+    createdAt: existing?.exists ? (existing.data() as Contract).createdAt : now,
+    updatedAt: now,
+  };
+
+  await ref.set(contract, { merge: true });
+  return contract;
+}
+
+export async function listInvoices(tenantId?: string): Promise<Invoice[]> {
+  const db = getDb();
+  const query = tenantId
+    ? db.collection(COLLECTIONS.invoices).where('tenantId', '==', tenantId)
+    : db.collection(COLLECTIONS.invoices);
+
+  const snap = await query.get();
+  return snap.docs
+    .map((d) => d.data() as Invoice)
+    .sort((a, b) => b.dueDate.localeCompare(a.dueDate));
+}
+
+export async function upsertInvoice(
+  input: Omit<Invoice, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+): Promise<Invoice> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const ref = input.id
+    ? db.collection(COLLECTIONS.invoices).doc(input.id)
+    : db.collection(COLLECTIONS.invoices).doc();
+
+  const existing = input.id ? await ref.get() : null;
+  const invoice: Invoice = {
+    ...input,
+    id: ref.id,
+    createdAt: existing?.exists ? (existing.data() as Invoice).createdAt : now,
+    updatedAt: now,
+  };
+
+  await ref.set(invoice, { merge: true });
+  return invoice;
+}
+
+/**
+ * Gera as faturas previstas de um contrato.
+ *
+ * Emitir tudo de uma vez, na assinatura, evita depender de alguém lembrar de
+ * faturar todo mês — o erro mais comum numa operação de fundador solo.
+ */
+export async function generateInvoicesForContract(contract: Contract): Promise<number> {
+  const db = getDb();
+  const existing = await listInvoices(contract.tenantId);
+  const already = new Set(
+    existing.filter((i) => i.contractId === contract.id).map((i) => i.reference)
+  );
+
+  const monthsPerCycle = contract.cycle === 'MENSAL' ? 1 : contract.cycle === 'SEMESTRAL' ? 6 : 12;
+  const start = new Date(contract.startDate);
+  const end = new Date(contract.endDate);
+
+  const batch = db.batch();
+  let created = 0;
+
+  for (
+    let d = new Date(start);
+    d < end && created < 60;
+    d.setUTCMonth(d.getUTCMonth() + monthsPerCycle)
+  ) {
+    const reference = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    if (already.has(reference)) continue;
+
+    // Vencimento no dia 10 do mês seguinte à competência: prazo realista para
+    // a prefeitura processar empenho e liquidação.
+    const due = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 10));
+    const ref = db.collection(COLLECTIONS.invoices).doc();
+    const now = new Date().toISOString();
+
+    batch.set(ref, {
+      id: ref.id,
+      tenantId: contract.tenantId,
+      contractId: contract.id,
+      reference,
+      amountCents: contract.amountCents,
+      status: 'PREVISTA',
+      dueDate: due.toISOString().slice(0, 10),
+      createdAt: now,
+      updatedAt: now,
+    } satisfies Invoice);
+
+    created += 1;
+  }
+
+  if (created > 0) await batch.commit();
+  return created;
+}
+
+/**
+ * Marca como VENCIDA toda fatura emitida cujo vencimento passou.
+ * Chamada quando o painel é aberto: sem um agendador, é o momento em que a
+ * informação é de fato consultada.
+ */
+export async function refreshOverdueInvoices(): Promise<number> {
+  const db = getDb();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const snap = await db
+    .collection(COLLECTIONS.invoices)
+    .where('status', '==', 'EMITIDA')
+    .get();
+
+  const vencidas = snap.docs.filter((d) => (d.data() as Invoice).dueDate < today);
+  if (vencidas.length === 0) return 0;
+
+  const batch = db.batch();
+  vencidas.forEach((d) =>
+    batch.update(d.ref, { status: 'VENCIDA', updatedAt: new Date().toISOString() })
+  );
+  await batch.commit();
+  return vencidas.length;
+}
+
+export async function billingSummaryFor(tenantId: string): Promise<BillingSummary> {
+  const [contract, invoices] = await Promise.all([
+    getContract(tenantId),
+    listInvoices(tenantId),
+  ]);
+
+  const year = new Date().getUTCFullYear();
+  const overdue = invoices.filter((i) => i.status === 'VENCIDA');
+  const open = invoices.filter((i) => i.status === 'EMITIDA' || i.status === 'VENCIDA');
+
+  const nextDue = invoices
+    .filter((i) => i.status === 'PREVISTA' || i.status === 'EMITIDA')
+    .map((i) => i.dueDate)
+    .sort()[0];
+
+  return {
+    contract,
+    openInvoices: open.length,
+    overdueInvoices: overdue.length,
+    overdueAmountCents: overdue.reduce((sum, i) => sum + i.amountCents, 0),
+    nextDueDate: nextDue ?? null,
+    paidThisYearCents: invoices
+      .filter((i) => i.status === 'PAGA' && i.paidAt?.startsWith(String(year)))
+      .reduce((sum, i) => sum + i.amountCents, 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Texto da lei
+// ---------------------------------------------------------------------------
+
+export async function getLawArticle(
+  lawSlug: string,
+  number: string
+): Promise<LawArticle | null> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.lawArticles)
+    .doc(`${lawSlug}__art${number}`)
+    .get();
+  return snap.exists ? (snap.data() as LawArticle) : null;
+}
+
+export async function getLawArticles(
+  lawSlug: string,
+  numbers: string[]
+): Promise<LawArticle[]> {
+  if (numbers.length === 0) return [];
+  const db = getDb();
+
+  // getAll evita uma ida ao banco por artigo quando o tópico cita vários.
+  const refs = numbers
+    .slice(0, 30)
+    .map((n) => db.collection(COLLECTIONS.lawArticles).doc(`${lawSlug}__art${n}`));
+
+  const docs = await db.getAll(...refs);
+  return docs.filter((d) => d.exists).map((d) => d.data() as LawArticle);
+}
+
+export async function countLawArticles(lawSlug: string): Promise<number> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.lawArticles)
+    .where('lawSlug', '==', lawSlug)
+    .count()
+    .get();
+  return snap.data().count;
 }
 
 // ---------------------------------------------------------------------------

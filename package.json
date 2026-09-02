@@ -12,7 +12,9 @@
     "seed:images": "node scripts/seedReelImages.mjs",
     "seed:images:dry": "node scripts/seedReelImages.mjs --dry-run",
     "seed:trails": "tsx scripts/seedTrails.ts",
-    "seed:trails:dry": "tsx scripts/seedTrails.ts --dry-run"
+    "seed:trails:dry": "tsx scripts/seedTrails.ts --dry-run",
+    "seed:lei": "tsx scripts/seedLawArticles.ts",
+    "seed:lei:dry": "tsx scripts/seedLawArticles.ts --dry-run"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

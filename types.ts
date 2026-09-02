@@ -167,6 +167,37 @@ export interface TenantStats {
 }
 
 // ---------------------------------------------------------------------------
+// Grupos — as turmas dentro da prefeitura
+//
+// Uma prefeitura compra assentos e distribui a equipe por secretaria. O gestor
+// precisa ver "como está a Saúde" e atribuir uma trilha só para Obras, então o
+// grupo é a unidade de organização e de relatório.
+// ---------------------------------------------------------------------------
+
+export interface Group {
+  /** `${tenantId}__${slug}` */
+  id: string;
+  tenantId: string;
+  slug: string;
+  /** "Secretaria de Educação", "Setor de Compras". */
+  name: string;
+  description?: string;
+  /**
+   * Trilhas atribuídas a este grupo. Vazio = herda as do tenant, que é o
+   * comportamento esperado enquanto a prefeitura não diferencia por área.
+   */
+  assignedTrails: string[];
+  /** Contadores para o painel não varrer os membros a cada abertura. */
+  stats?: {
+    members: number;
+    activeMembers30d: number;
+    averagePoints: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Membership — liga um usuário a um tenant com um papel
 // ---------------------------------------------------------------------------
 
@@ -181,7 +212,12 @@ export interface Membership {
   invitedAt?: string;
   joinedAt?: string;
   lastAccessAt?: string;
-  /** Secretaria/departamento — permite recortar relatórios por área. */
+  /**
+   * Grupo do servidor. Um por pessoa: relatório em que o mesmo servidor conta
+   * em duas secretarias não ajuda ninguém a decidir.
+   */
+  groupId?: string;
+  /** Texto livre anterior aos grupos. Mantido para não perder o que já existe. */
   department?: string;
 }
 
@@ -437,6 +473,114 @@ export interface ReelImage {
     sourceUrl?: string;
     license: string;
   };
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Contratos e faturamento
+//
+// Prefeitura não paga cartão recorrente: o fluxo é empenho, nota fiscal e
+// pagamento por transferência, respeitando a ordem cronológica de
+// exigibilidade (Art. 141 da 14.133). Por isso o modelo acompanha um contrato
+// e as suas faturas em vez de tentar debitar automaticamente.
+// ---------------------------------------------------------------------------
+
+export type ContractStatus =
+  | 'EM_NEGOCIACAO'
+  | 'ATIVO'
+  /** Vigência terminou e a renovação não foi assinada. */
+  | 'ENCERRADO'
+  | 'CANCELADO';
+
+export type BillingCycle = 'MENSAL' | 'SEMESTRAL' | 'ANUAL';
+
+export interface Contract {
+  id: string;
+  tenantId: string;
+  plan: PlanId;
+  status: ContractStatus;
+  cycle: BillingCycle;
+
+  /** Valor acordado em centavos. Pode divergir do preço de tabela do plano. */
+  amountCents: number;
+  seats: number;
+
+  startDate: string;
+  endDate: string;
+
+  /** Número do processo administrativo e do empenho, quando informados. */
+  processNumber?: string;
+  commitmentNumber?: string;
+  /** Enquadramento: "Dispensa Art. 75, II", "Pregão 12/2026", "Adesão a ata". */
+  procurementBasis?: string;
+
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InvoiceStatus =
+  | 'PREVISTA'
+  /** Nota emitida e enviada à prefeitura. */
+  | 'EMITIDA'
+  | 'PAGA'
+  /** Passou do vencimento sem baixa. */
+  | 'VENCIDA'
+  | 'CANCELADA';
+
+export interface Invoice {
+  id: string;
+  tenantId: string;
+  contractId: string;
+
+  /** Competência no formato AAAA-MM. */
+  reference: string;
+  amountCents: number;
+  status: InvoiceStatus;
+
+  issuedAt?: string;
+  dueDate: string;
+  paidAt?: string;
+
+  /** Número da nota fiscal de serviço, preenchido ao emitir. */
+  invoiceNumber?: string;
+  notes?: string;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Situação financeira consolidada do tenant, para o painel e para a régua de cobrança. */
+export interface BillingSummary {
+  contract: Contract | null;
+  openInvoices: number;
+  overdueInvoices: number;
+  overdueAmountCents: number;
+  nextDueDate: string | null;
+  /** Receita reconhecida no ano corrente. */
+  paidThisYearCents: number;
+}
+
+// ---------------------------------------------------------------------------
+// Texto da lei — base de consulta
+//
+// Os tópicos da trilha ensinam por tema; o texto integral existe para o aluno
+// conferir a redação exata e para a IA citar o dispositivo sem inventar.
+// ---------------------------------------------------------------------------
+
+export interface LawArticle {
+  /** `${lawSlug}__art${number}` */
+  id: string;
+  /** "lei-14133". */
+  lawSlug: string;
+  /** Número do artigo. "75" para o Art. 75. */
+  number: string;
+  /** Texto do caput. */
+  caput: string;
+  /** Incisos, parágrafos e alíneas, na ordem em que aparecem. */
+  items: { label: string; text: string }[];
+  /** Capítulo ou seção em que o artigo está. */
+  section?: string;
   createdAt: string;
 }
 

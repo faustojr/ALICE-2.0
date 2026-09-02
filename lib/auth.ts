@@ -135,6 +135,55 @@ export async function requireTenantAdmin(
 }
 
 /**
+ * Escopo de trabalho de quem administra uma prefeitura.
+ *
+ * Unifica os dois casos que toda rota do gestor precisa tratar: o gestor,
+ * preso ao próprio município, e a equipe ALICE, que opera qualquer um. Sem
+ * isso cada rota reimplementaria a checagem — e uma delas esqueceria.
+ */
+export async function requireTenantScope(
+  authorization: string | undefined,
+  requestedTenantId?: string
+): Promise<Session & { isSuperAdmin: boolean }> {
+  const identity = await requireVerifiedIdentity(authorization);
+  const isSuperAdmin = superAdminEmails().includes(identity.email);
+
+  if (isSuperAdmin) {
+    return {
+      email: identity.email,
+      displayName: identity.name,
+      // Sem tenant pedido, o super admin opera em visão geral.
+      tenantId: requestedTenantId ?? null,
+      role: 'SUPER_ADMIN',
+      verified: true,
+      isSuperAdmin: true,
+    };
+  }
+
+  const membership = await findMembershipByEmail(identity.email);
+  if (!membership || membership.role !== 'TENANT_ADMIN') {
+    throw new AuthError(
+      'Esta área é restrita ao gestor de capacitação da prefeitura.',
+      403
+    );
+  }
+
+  // Um gestor pedindo outro tenant é tentativa de acesso cruzado, não engano.
+  if (requestedTenantId && requestedTenantId !== membership.tenantId) {
+    throw new AuthError('Você não administra esta prefeitura.', 403);
+  }
+
+  return {
+    email: identity.email,
+    displayName: identity.name,
+    tenantId: membership.tenantId,
+    role: 'TENANT_ADMIN',
+    verified: true,
+    isSuperAdmin: false,
+  };
+}
+
+/**
  * Resolve o vínculo do aluno no modo OPEN_PILOT.
  *
  * ATENÇÃO: o e-mail aqui NÃO é verificado. Serve para atribuir progresso,
