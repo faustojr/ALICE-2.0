@@ -11,7 +11,7 @@ import { applyCors, clientIp, handleError, methodNotAllowed, rateLimit } from '.
 import { resolveUnverifiedStudent } from '../lib/auth.js';
 import { findTenantByEmailDomain } from '../lib/auth.js';
 import { checkSeatAvailability, getUser, upsertMembership, upsertUser } from '../lib/repositories.js';
-import type { LearningLevel } from '../types.js';
+import { highestUnlockedLevel, type LearningLevel } from '../types.js';
 
 const LEVELS: LearningLevel[] = ['Básico', 'Intermediário', 'Especialista'];
 
@@ -85,9 +85,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         Math.min(incomingPoints, currentPoints + MAX_POINTS_DELTA)
       );
 
-      const level = LEVELS.includes(progress.currentLevel)
-        ? progress.currentLevel
-        : (existing?.currentLevel ?? 'Básico');
+      // O nível pedido é limitado pelo que o desempenho já abriu: sem isso, o
+      // aluno pularia direto para Especialista e receberia conteúdo acima da
+      // faixa produtiva de desafio.
+      const unlocked = highestUnlockedLevel(
+        Math.max(
+          Number(existing?.correctAnswersTotal ?? 0),
+          Number(progress.correctAnswersTotal ?? 0)
+        )
+      );
+
+      const requested = LEVELS.includes(progress.currentLevel)
+        ? (progress.currentLevel as LearningLevel)
+        : ((existing?.currentLevel as LearningLevel) ?? 'Básico');
+
+      const level =
+        LEVELS.indexOf(requested) <= LEVELS.indexOf(unlocked) ? requested : unlocked;
 
       await upsertUser(session.email, {
         name: progress.name || existing?.name || session.email.split('@')[0],
@@ -105,6 +118,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           Number(existing?.quizCount ?? 0),
           Number(progress.quizCount ?? 0)
         ),
+        // Acertos acumulados controlam o desbloqueio de nível, então nunca
+        // retrocedem: um cliente que reenvie estado antigo não rebaixa o aluno.
+        correctAnswersTotal: Math.max(
+          Number(existing?.correctAnswersTotal ?? 0),
+          Number(progress.correctAnswersTotal ?? 0)
+        ),
         correctQuizzesCount: progress.correctQuizzesCount ?? existing?.correctQuizzesCount,
         completedQuizzes: Array.isArray(progress.completedQuizzes)
           ? progress.completedQuizzes.slice(0, 2000)
@@ -117,7 +136,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         pilotStatus: existing?.pilotStatus ?? 'ativo',
       });
 
-      return res.json({ ok: true, points, tenantId, seatWarning });
+      return res.json({
+        ok: true,
+        points,
+        tenantId,
+        seatWarning,
+        unlockedLevel: unlocked,
+        // Sinaliza quando o nível pedido foi rebaixado, para o app explicar
+        // em vez de simplesmente ignorar a escolha do aluno.
+        levelAdjusted: level !== requested,
+      });
     }
 
     return methodNotAllowed(res, ['GET', 'POST']);

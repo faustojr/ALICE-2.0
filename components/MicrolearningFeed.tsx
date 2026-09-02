@@ -120,6 +120,16 @@ const MicrolearningFeed: React.FC<{
     return defaults;
   });
 
+  // Devolvidos pelo servidor a cada resposta: o ganho real do acerto e a
+  // situação de desbloqueio, para o app celebrar no momento em que acontece.
+  const [progression, setProgression] = useState<{
+    unlockedLevel: string;
+    levelUnlockedNow: boolean;
+    remainingToNextLevel: number | null;
+    careerTier: string;
+  } | null>(null);
+  const [lastPoints, setLastPoints] = useState<number | null>(null);
+
   const [showPostSurvey, setShowPostSurvey] = useState(startWithPostSurvey);
   const [surveyAnswers, setSurveyAnswers] = useState({
     pos_daysUsed: 5,
@@ -476,14 +486,23 @@ const MicrolearningFeed: React.FC<{
     setSelectedOption(value);
     setQuizAnswered(true);
 
-    // Reporta o resultado à variante servida. É o que permite promover a
-    // conteúdo padrão uma explicação gerada pela IA que levou alunos ao
-    // acerto — e o que faz cada geração ser paga uma vez só.
+    // Reporta o resultado. Isso pontua com peso cognitivo, promove a variante
+    // quando ela leva alunos ao acerto, e controla o desbloqueio de nível.
     const email = auth.currentUser?.email;
-    if (email && currentModule?.variantId) {
-      reportQuizResult(email, currentModule.variantId, value === 'correct').catch(
-        (err) => console.error('Falha ao reportar resultado do quiz:', err)
-      );
+    if (email) {
+      reportQuizResult(
+        email,
+        currentModule?.variantId,
+        value === 'correct',
+        currentModule?.cognitiveLevel
+      )
+        .then((result) => {
+          if (result?.progression) {
+            setProgression(result.progression);
+            setLastPoints(result.pointsAwarded);
+          }
+        })
+        .catch((err) => console.error('Falha ao reportar resultado do quiz:', err));
     }
 
     if (value === 'correct') {
@@ -517,12 +536,20 @@ const MicrolearningFeed: React.FC<{
     setQuizAnswered(false);
     setSelectedOption(null);
     try {
+      // A alternativa marcada revela a confusão exata; passá-la faz a
+      // remediação atacar o ponto do erro em vez de reexplicar o tema todo.
+      const chosen = currentModule?.options.find((o) => o.value === selectedOption);
+
       const module = await generateReelsModule(
         trailSlug, 
         userState.currentModuleIndex, 
         userState.currentLevel, 
         false, 
-        userState.currentFailCount || 1
+        userState.currentFailCount || 1,
+        {
+          wrongAnswerChosen: chosen?.label,
+          previousQuestion: currentModule?.question,
+        }
       );
       setCurrentModule(module);
       setUserState(prev => ({ ...prev, currentSlideIndex: 0 }));
@@ -1098,8 +1125,25 @@ const MicrolearningFeed: React.FC<{
               >
                 <Trophy className="w-20 h-20 text-white mx-auto mb-4" />
               </motion.div>
-              <h3 className="text-2xl font-black text-white mb-2 uppercase italic">Excelente!</h3>
-              <p className="text-white/90 font-bold">+100 XP</p>
+              {/* Nomear a competência exercida é a "experiência de maestria"
+                  de Bandura: o acerto vira evidência concreta de capacidade,
+                  em vez de elogio genérico. */}
+              <h3 className="text-2xl font-black text-white mb-2 uppercase italic">
+                {currentModule?.competency ? 'Você demonstrou' : 'Excelente!'}
+              </h3>
+              {currentModule?.competency && (
+                <p className="text-white font-bold text-sm max-w-[16rem] mx-auto mb-3 normal-case">
+                  {currentModule.competency}
+                </p>
+              )}
+              <p className="text-white/90 font-bold">+{lastPoints ?? 100} XP</p>
+              {progression?.remainingToNextLevel != null &&
+                progression.remainingToNextLevel > 0 &&
+                progression.remainingToNextLevel <= 10 && (
+                  <p className="text-white/80 text-xs mt-2">
+                    Faltam {progression.remainingToNextLevel} para o próximo nível
+                  </p>
+                )}
             </div>
           </motion.div>
         )}

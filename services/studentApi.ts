@@ -187,6 +187,16 @@ export interface QuizResultResponse {
   promoted: boolean;
   correctCount?: number;
   threshold?: number;
+  pointsAwarded: number;
+  cognitiveLevel: string | null;
+  progression: {
+    correctAnswersTotal: number;
+    unlockedLevel: 'Básico' | 'Intermediário' | 'Especialista';
+    levelUnlockedNow: boolean;
+    nextLevelAt: number | null;
+    remainingToNextLevel: number | null;
+    careerTier: string;
+  };
 }
 
 /**
@@ -198,14 +208,15 @@ export interface QuizResultResponse {
  */
 export async function reportQuizResult(
   email: string,
-  variantId: string,
-  correct: boolean
+  variantId: string | undefined,
+  correct: boolean,
+  cognitiveLevel?: string
 ): Promise<QuizResultResponse | null> {
   try {
     const response = await fetch('/api/quizResult', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, variantId, correct }),
+      body: JSON.stringify({ email, variantId, correct, cognitiveLevel }),
     });
     if (!response.ok) return null;
     return await response.json();

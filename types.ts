@@ -271,6 +271,57 @@ export interface TrailSummary {
 export type LearningLevel = 'Básico' | 'Intermediário' | 'Especialista';
 
 // ---------------------------------------------------------------------------
+// Progressão do servidor
+//
+// Duas lógicas independentes, como descrito na dissertação:
+//
+// 1. MOTIVACIONAL (XP) — metas de carreira exibidas no painel, operando o
+//    framework Octalysis por progresso tangível. Não desbloqueia nada.
+// 2. PEDAGÓGICA (acertos) — controla o avanço real entre camadas de conteúdo
+//    e determina a complexidade que a IA deve produzir.
+//
+// Os limiares originalmente publicados (500/1.500/3.000 XP e 15/30 acertos)
+// foram revisados por ordem de grandeza: no ritmo real de uso, o servidor
+// alcançaria o topo em poucas semanas e a trilha perderia horizonte. Ver a
+// nota de errata em docs/ERRATA.md.
+// ---------------------------------------------------------------------------
+
+/** Patamares de XP exibidos como metas de carreira. */
+export const XP_TIERS = {
+  INICIANTE: 5_000,
+  INTERMEDIARIO: 15_000,
+  ESPECIALISTA: 30_000,
+} as const;
+
+/** Acertos acumulados para desbloquear cada camada de conteúdo. */
+export const LEVEL_UNLOCK_CORRECT_ANSWERS = {
+  Intermediário: 150,
+  Especialista: 300,
+} as const;
+
+/**
+ * Peso do acerto por demanda cognitiva (Bloom Revisada).
+ * Espelha COGNITIVE_WEIGHTS em lib/moduleGenerator.ts, que é a fonte usada
+ * pelo servidor ao pontuar.
+ */
+export const BASE_QUIZ_POINTS = 100;
+
+/** Nível máximo que o aluno pode acessar com o desempenho acumulado. */
+export function highestUnlockedLevel(correctAnswers: number): LearningLevel {
+  if (correctAnswers >= LEVEL_UNLOCK_CORRECT_ANSWERS.Especialista) return 'Especialista';
+  if (correctAnswers >= LEVEL_UNLOCK_CORRECT_ANSWERS.Intermediário) return 'Intermediário';
+  return 'Básico';
+}
+
+/** Faixa de carreira correspondente ao XP acumulado. */
+export function careerTier(points: number): 'Aprendiz' | 'Iniciante' | 'Intermediário' | 'Especialista' {
+  if (points >= XP_TIERS.ESPECIALISTA) return 'Especialista';
+  if (points >= XP_TIERS.INTERMEDIARIO) return 'Intermediário';
+  if (points >= XP_TIERS.INICIANTE) return 'Iniciante';
+  return 'Aprendiz';
+}
+
+// ---------------------------------------------------------------------------
 // Acessibilidade
 // ---------------------------------------------------------------------------
 
@@ -313,6 +364,10 @@ export interface ModuleContent {
    * nem penalizado pelo resultado do quiz.
    */
   variantId?: string;
+  /** Demanda cognitiva da questão, usada para ponderar os pontos do acerto. */
+  cognitiveLevel?: string;
+  /** Competência que o aluno demonstra ao acertar. */
+  competency?: string;
 }
 
 export interface Message {

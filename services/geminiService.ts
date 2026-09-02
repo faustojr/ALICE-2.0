@@ -120,7 +120,13 @@ export async function generateReelsModule(
     index: number, 
     level: 'Básico' | 'Intermediário' | 'Especialista',
     isPrefetch: boolean = false,
-    failCount: number = 0
+    failCount: number = 0,
+    /**
+     * Alternativa que o aluno marcou ao errar e a pergunta que ele viu.
+     * Sem isso a remediação sabe apenas QUE houve erro; com isso ela ataca a
+     * confusão específica.
+     */
+    wrongContext?: { wrongAnswerChosen?: string; previousQuestion?: string }
 ): Promise<ModuleContent> {
     const cacheKey = `${trail}_${level}_${index}`;
 
@@ -149,7 +155,9 @@ export async function generateReelsModule(
                 index, 
                 level, 
                 failCount, 
-                email: auth.currentUser?.email || undefined 
+                email: auth.currentUser?.email || undefined,
+                wrongAnswerChosen: wrongContext?.wrongAnswerChosen,
+                previousQuestion: wrongContext?.previousQuestion
             })
         });
         
@@ -178,7 +186,9 @@ export async function generateReelsModule(
             feedbackCorrect: data.feedbackCorrect,
             feedbackWrong: data.feedbackWrong,
             variationId: data.variationId,
-            variantId: data.variantId ?? undefined
+            variantId: data.variantId ?? undefined,
+            cognitiveLevel: data.cognitiveLevel ?? undefined,
+            competency: data.competency ?? undefined
         };
 
         // Store in cache for future offline use
