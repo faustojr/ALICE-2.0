@@ -17,20 +17,9 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCors, handleError, methodNotAllowed } from '../../lib/http.js';
-import {
-  AuthError,
-  findMembershipByEmail,
-  requireVerifiedIdentity,
-} from '../../lib/auth.js';
+import { requireTenantScope } from '../../lib/auth.js';
 import { getDb, COLLECTIONS } from '../../lib/firebaseAdmin.js';
-import { listTenantUsers } from '../../lib/repositories.js';
-
-function superAdminEmails(): string[] {
-  return (process.env.SUPER_ADMIN_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-}
+import { billingSummaryFor, listGroups, listTenantMembers, listTenantUsers } from '../../lib/repositories.js';
 
 /** Campos do documento de usuário que o painel usa. Nada além disso sai daqui. */
 function toMember(data: Record<string, any>, id: string) {
@@ -143,25 +132,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
 
   try {
-    const identity = await requireVerifiedIdentity(req.headers.authorization);
-    const isSuperAdmin = superAdminEmails().includes(identity.email);
-
-    let tenantId: string | null = null;
-
-    if (isSuperAdmin) {
-      // Sem tenantId, o super admin vê tudo — inclusive os alunos do piloto
-      // atual, que ainda não têm vínculo com nenhuma prefeitura.
-      tenantId = req.query.tenantId ? String(req.query.tenantId) : null;
-    } else {
-      const membership = await findMembershipByEmail(identity.email);
-      if (!membership || membership.role !== 'TENANT_ADMIN') {
-        throw new AuthError(
-          'Este painel é restrito ao gestor de capacitação da prefeitura.',
-          403
-        );
-      }
-      tenantId = membership.tenantId;
-    }
+    const scope = await requireTenantScope(
+      req.headers.authorization,
+      req.query.tenantId ? String(req.query.tenantId) : undefined
+    );
+    const tenantId = scope.tenantId;
+    const isSuperAdmin = scope.isSuperAdmin;
 
     const db = getDb();
 
@@ -177,24 +153,72 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : db.collection(COLLECTIONS.surveys).get(),
     ]);
 
-    const members = (rawMembers as Record<string, any>[]).map((data) =>
-      toMember(data, data.id ?? data.email)
+    // O grupo de cada servidor vive no membership, não no documento de
+    // progresso. Sem cruzar os dois, as turmas criadas pelo gestor não
+    // apareceriam em relatório nenhum.
+    const [groups, memberships, billing] = tenantId
+      ? await Promise.all([
+          listGroups(tenantId),
+          listTenantMembers(tenantId),
+          // O gestor precisa saber se o contrato dele está em dia: descobrir
+          // um vencimento pela suspensão do acesso é a pior forma de saber.
+          billingSummaryFor(tenantId).catch(() => null),
+        ])
+      : [[], [], null];
+
+    const groupByEmail = new Map(
+      memberships.filter((m) => m.groupId).map((m) => [m.email, m.groupId as string])
     );
+    const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+
+    const members = (rawMembers as Record<string, any>[]).map((data) => {
+      const base = toMember(data, data.id ?? data.email);
+      const groupId = groupByEmail.get(base.email) ?? null;
+      return { ...base, groupId, groupName: groupId ? groupNames.get(groupId) ?? null : null };
+    });
+
     const surveys = surveySnap.docs.map((d) => toSurvey(d.data(), d.id));
 
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const activeUsers30d = members.filter(
-      (m) => m.lastAccess && Date.parse(m.lastAccess) > thirtyDaysAgo
-    ).length;
+    const isActive = (m: { lastAccess: string | null }) =>
+      Boolean(m.lastAccess && Date.parse(m.lastAccess) > thirtyDaysAgo);
 
+    const activeUsers30d = members.filter(isActive).length;
     const totalPoints = members.reduce((sum, m) => sum + m.points, 0);
     const totalQuizzes = members.reduce((sum, m) => sum + m.quizCount, 0);
+
+    // Desempenho por secretaria: é a leitura que o gestor leva à reunião.
+    const byGroup = groups.map((g) => {
+      const groupMembers = members.filter((m) => m.groupId === g.id);
+      const points = groupMembers.reduce((sum, m) => sum + m.points, 0);
+      const quizzes = groupMembers.reduce((sum, m) => sum + m.quizCount, 0);
+
+      return {
+        id: g.id,
+        name: g.name,
+        members: groupMembers.length,
+        active30d: groupMembers.filter(isActive).length,
+        averagePoints: groupMembers.length ? Math.round(points / groupMembers.length) : 0,
+        totalQuizzes: quizzes,
+      };
+    });
 
     return res.json({
       generatedAt: new Date().toISOString(),
       scope: { tenantId, isSuperAdmin },
       members,
       surveys,
+      groups: byGroup,
+      ungroupedMembers: members.filter((m) => !m.groupId).length,
+      billing: billing
+        ? {
+            hasContract: Boolean(billing.contract),
+            planEndsAt: billing.contract?.endDate ?? null,
+            seats: billing.contract?.seats ?? null,
+            overdueInvoices: billing.overdueInvoices,
+            nextDueDate: billing.nextDueDate,
+          }
+        : null,
       summary: {
         totalMembers: members.length,
         activeUsers30d,

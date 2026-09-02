@@ -10,7 +10,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCors, clientIp, handleError, methodNotAllowed, rateLimit } from '../lib/http.js';
 import { resolveUnverifiedStudent } from '../lib/auth.js';
 import { findTenantByEmailDomain } from '../lib/auth.js';
-import { getUser, upsertMembership, upsertUser } from '../lib/repositories.js';
+import { checkSeatAvailability, getUser, upsertMembership, upsertUser } from '../lib/repositories.js';
 import type { LearningLevel } from '../types.js';
 
 const LEVELS: LearningLevel[] = ['Básico', 'Intermediário', 'Especialista'];
@@ -56,10 +56,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // Vincula ao tenant pelo domínio na primeira gravação, quando aplicável.
       let tenantId = session.tenantId;
+      let seatWarning: string | null = null;
+
       if (!tenantId) {
         tenantId = await findTenantByEmailDomain(session.email);
         if (tenantId) {
-          await upsertMembership(tenantId, session.email, 'ALUNO');
+          const seat = await checkSeatAvailability(tenantId, session.email);
+          if (seat.allowed) {
+            await upsertMembership(tenantId, session.email, 'ALUNO');
+          } else {
+            // O servidor continua estudando; o que não acontece é o vínculo
+            // consumir um assento acima do contratado sem ninguém saber.
+            tenantId = null;
+            seatWarning = `Limite de ${seat.limit} servidores do plano atingido.`;
+            console.warn(
+              `[seats] ${session.email} sem vínculo: limite do plano atingido.`
+            );
+          }
         }
       }
 
@@ -104,7 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         pilotStatus: existing?.pilotStatus ?? 'ativo',
       });
 
-      return res.json({ ok: true, points, tenantId });
+      return res.json({ ok: true, points, tenantId, seatWarning });
     }
 
     return methodNotAllowed(res, ['GET', 'POST']);

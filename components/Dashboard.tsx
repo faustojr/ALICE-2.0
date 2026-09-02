@@ -467,6 +467,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [rankingFilter, setRankingFilter] = useState('Geral');
   const [serverData, setServerData] = useState<UserPerformance[]>([]);
   const [surveyData, setSurveyData] = useState<ManagerSurvey[]>([]);
+  const [groupPerformance, setGroupPerformance] = useState<
+    { id: string; name: string; members: number; active30d: number; averagePoints: number; totalQuizzes: number }[]
+  >([]);
+  const [ungroupedCount, setUngroupedCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [accessError, setAccessError] = useState<{ message: string; status: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'PILOT' | 'TURMAS' | 'CONTEUDO'>('OVERVIEW');
@@ -486,6 +490,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
       const overview = await fetchManagerOverview();
       setServerData(overview.members as unknown as UserPerformance[]);
       setSurveyData(overview.surveys);
+      setGroupPerformance(overview.groups ?? []);
+      setUngroupedCount(overview.ungroupedMembers ?? 0);
     } catch (err) {
       if (err instanceof ManagerApiError) {
         setAccessError({ message: err.message, status: err.status });
@@ -703,6 +709,57 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
       {activeTab === 'OVERVIEW' ? (
         <>
           <div className="flex-grow">
+              {groupPerformance.length > 0 && (
+                <div className="mb-8">
+                  <div className="flex items-baseline justify-between mb-3">
+                    <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+                      Desempenho por secretaria
+                    </h2>
+                    {ungroupedCount > 0 && (
+                      <span className="text-xs text-amber-400">
+                        {ungroupedCount} servidor(es) sem turma
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {groupPerformance.map((g) => (
+                      <div
+                        key={g.id}
+                        className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5"
+                      >
+                        <h3 className="text-white font-bold mb-3 truncate">{g.name}</h3>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div>
+                            <p className="text-xl font-bold text-white tabular-nums">
+                              {g.members}
+                            </p>
+                            <p className="text-xs text-slate-500">servidores</p>
+                          </div>
+                          <div>
+                            <p
+                              className={`text-xl font-bold tabular-nums ${
+                                g.members > 0 && g.active30d === 0
+                                  ? 'text-red-400'
+                                  : 'text-emerald-400'
+                              }`}
+                            >
+                              {g.active30d}
+                            </p>
+                            <p className="text-xs text-slate-500">ativos</p>
+                          </div>
+                          <div>
+                            <p className="text-xl font-bold text-white tabular-nums">
+                              {g.totalQuizzes}
+                            </p>
+                            <p className="text-xs text-slate-500">quizzes</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 {kpiData.map((kpi, index) => (
                     <KPICard 

@@ -128,6 +128,49 @@ export async function listTenantMembers(tenantId: string): Promise<Membership[]>
   return snap.docs.map((d) => d.data() as Membership);
 }
 
+/**
+ * Verifica se ainda há assento disponível no plano da prefeitura.
+ *
+ * O produto é vendido por número de servidores; sem esta checagem uma
+ * prefeitura no plano de 30 assentos cadastra 500 e a conta da IA cresce sem
+ * a receita correspondente.
+ *
+ * Não bloqueia quem já entrou: tirar o acesso de um servidor no meio do
+ * estudo por causa de um limite comercial é hostil e não recupera receita.
+ * O excesso vira sinal para o painel e conversa de upgrade.
+ */
+export async function checkSeatAvailability(
+  tenantId: string | null,
+  email: string
+): Promise<{ allowed: boolean; used: number; limit: number | null; overLimit: boolean }> {
+  if (!tenantId) return { allowed: true, used: 0, limit: null, overLimit: false };
+
+  const tenant = await getTenant(tenantId);
+  if (!tenant) return { allowed: true, used: 0, limit: null, overLimit: false };
+
+  const limit = PLANS[tenant.plan]?.seats ?? null;
+  if (limit === null) return { allowed: true, used: 0, limit: null, overLimit: false };
+
+  // Quem já tem vínculo não consome assento novo.
+  const existing = await getMembershipRecord(tenantId, email);
+  if (existing) {
+    const used = await countTenantSeats(tenantId);
+    return { allowed: true, used, limit, overLimit: used > limit };
+  }
+
+  const used = await countTenantSeats(tenantId);
+  return { allowed: used < limit, used, limit, overLimit: used >= limit };
+}
+
+async function getMembershipRecord(tenantId: string, email: string) {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.memberships)
+    .doc(`${tenantId}__${emailKey(email)}`)
+    .get();
+  return snap.exists ? (snap.data() as Membership) : null;
+}
+
 export async function countTenantSeats(tenantId: string): Promise<number> {
   const db = getDb();
   const snap = await db

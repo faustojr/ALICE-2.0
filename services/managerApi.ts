@@ -31,6 +31,8 @@ export interface ManagerMember {
   cycleCount?: number;
   lastAccess: string | null;
   tenantId: string | null;
+  groupId?: string | null;
+  groupName?: string | null;
 }
 
 export interface ManagerSurvey {
@@ -54,11 +56,29 @@ export interface ManagerSurvey {
   pos_useAgain?: number;
 }
 
+export interface GroupPerformance {
+  id: string;
+  name: string;
+  members: number;
+  active30d: number;
+  averagePoints: number;
+  totalQuizzes: number;
+}
+
 export interface ManagerOverview {
   generatedAt: string;
   scope: { tenantId: string | null; isSuperAdmin: boolean };
   members: ManagerMember[];
   surveys: ManagerSurvey[];
+  groups: GroupPerformance[];
+  ungroupedMembers: number;
+  billing: {
+    hasContract: boolean;
+    planEndsAt: string | null;
+    seats: number | null;
+    overdueInvoices: number;
+    nextDueDate: string | null;
+  } | null;
   summary: {
     totalMembers: number;
     activeUsers30d: number;
