@@ -1,0 +1,127 @@
+/**
+ * /api/progress — leitura e gravação do progresso do aluno.
+ *
+ * Substitui a escrita direta do cliente no Firestore. Mesmo no modo piloto
+ * (e-mail não verificado), passar por aqui permite validar os limites do
+ * progresso e vincular o aluno ao tenant correto.
+ */
+
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { applyCors, clientIp, handleError, methodNotAllowed, rateLimit } from '../lib/http.js';
+import { resolveUnverifiedStudent } from '../lib/auth.js';
+import { findTenantByEmailDomain } from '../lib/auth.js';
+import { checkSeatAvailability, getUser, upsertMembership, upsertUser } from '../lib/repositories.js';
+import { highestUnlockedLevel, type LearningLevel } from '../types.js';
+
+const LEVELS: LearningLevel[] = ['Básico', 'Intermediário', 'Especialista'];
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (applyCors(req, res)) return;
+
+  try {
+    if (req.method === 'GET') {
+      const email = String(req.query.email || '');
+      if (!email) return res.status(400).json({ error: 'E-mail não informado.' });
+
+      const session = await resolveUnverifiedStudent(email);
+      const user = await getUser(session.email);
+
+      return res.json({
+        user,
+        tenantId: session.tenantId,
+      });
+    }
+
+    if (req.method === 'POST') {
+      const limit = rateLimit(`progress:${clientIp(req)}`, 120, 15 * 60 * 1000);
+      if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
+        return res.status(429).json({ error: 'Muitas gravações. Aguarde um momento.' });
+      }
+
+      const { email, progress } = req.body ?? {};
+      if (!email) return res.status(400).json({ error: 'E-mail não informado.' });
+      if (!progress || typeof progress !== 'object') {
+        return res.status(400).json({ error: 'Progresso não informado.' });
+      }
+
+      const session = await resolveUnverifiedStudent(String(email));
+      const existing = (await getUser(session.email)) as Record<string, any> | null;
+
+      // Vincula ao tenant pelo domínio na primeira gravação, quando aplicável.
+      let tenantId = session.tenantId;
+      let seatWarning: string | null = null;
+
+      if (!tenantId) {
+        tenantId = await findTenantByEmailDomain(session.email);
+        if (tenantId) {
+          const seat = await checkSeatAvailability(tenantId, session.email);
+          if (seat.allowed) {
+            await upsertMembership(tenantId, session.email, 'ALUNO');
+          } else {
+            // O servidor continua estudando; o que não acontece é o vínculo
+            // consumir um assento acima do contratado sem ninguém saber.
+            tenantId = null;
+            seatWarning = `Limite de ${seat.limit} servidores do plano atingido.`;
+            console.warn(
+              `[seats] ${session.email} sem vínculo: limite do plano atingido.`
+            );
+          }
+        }
+      }
+
+      // Pontuação e acertos acumulados NÃO entram por aqui. Quem os escreve é
+      // /api/quizResult, que aplica o peso cognitivo do acerto. Aceitar o
+      // número do cliente aqui apagaria essa ponderação — ele conta 100 por
+      // acerto e não conhece a demanda da questão.
+      const unlocked = highestUnlockedLevel(
+        Number(existing?.correctAnswersTotal ?? 0)
+      );
+
+      const requested = LEVELS.includes(progress.currentLevel)
+        ? (progress.currentLevel as LearningLevel)
+        : ((existing?.currentLevel as LearningLevel) ?? 'Básico');
+
+      const level =
+        LEVELS.indexOf(requested) <= LEVELS.indexOf(unlocked) ? requested : unlocked;
+
+      await upsertUser(session.email, {
+        name: progress.name || existing?.name || session.email.split('@')[0],
+        tenantId: tenantId ?? existing?.tenantId ?? null,
+        level: Number(progress.level) || existing?.level || 1,
+        currentLevel: level,
+        currentTrail: progress.currentTrail ?? existing?.currentTrail ?? null,
+        currentModuleIndex: Number(progress.currentModuleIndex) || 0,
+        highestModuleIndex: Math.max(
+          Number(existing?.highestModuleIndex ?? 0),
+          Number(progress.highestModuleIndex ?? 0)
+        ),
+        correctQuizzesCount: progress.correctQuizzesCount ?? existing?.correctQuizzesCount,
+        completedQuizzes: Array.isArray(progress.completedQuizzes)
+          ? progress.completedQuizzes.slice(0, 2000)
+          : existing?.completedQuizzes,
+        badges: Array.isArray(progress.badges) ? progress.badges.slice(0, 200) : existing?.badges,
+        streakDays: Number(progress.streakDays) || existing?.streakDays || 0,
+        lastStudyDate: progress.lastStudyDate ?? existing?.lastStudyDate ?? null,
+        hasTestedReels: Boolean(progress.hasTestedReels ?? existing?.hasTestedReels),
+        status: 'ativo',
+        pilotStatus: existing?.pilotStatus ?? 'ativo',
+      });
+
+      return res.json({
+        ok: true,
+        points: Number(existing?.points ?? 0),
+        tenantId,
+        seatWarning,
+        unlockedLevel: unlocked,
+        // Sinaliza quando o nível pedido foi rebaixado, para o app explicar
+        // em vez de simplesmente ignorar a escolha do aluno.
+        levelAdjusted: level !== requested,
+      });
+    }
+
+    return methodNotAllowed(res, ['GET', 'POST']);
+  } catch (err) {
+    return handleError(res, err, 'progress');
+  }
+}

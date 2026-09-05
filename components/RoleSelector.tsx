@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 import type { UserRole, UserState } from '../types';
 import { AdminIcon, UserIcon, BrainIcon, CheckCircleIcon, SparklesIcon, TrashIcon, XMarkIcon, ExclamationCircleIcon } from './Icons';
 import { useAccessibility } from '../App';
-import { auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut, db, setEmulatedUser } from '../firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut, setEmulatedUser } from '../firebase';
+import { fetchProgress, saveProgress } from '../services/studentApi';
 
 interface RoleSelectorProps {
   onSelectRole: (role: UserRole, resume?: boolean, savedLevel?: 'Básico' | 'Intermediário' | 'Especialista') => void;
@@ -34,9 +34,9 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
         // Tenta buscar do Firestore
         try {
           const emailKey = user.email!.toLowerCase();
-          const userDoc = await getDoc(doc(db, 'users', emailKey));
-          if (userDoc.exists()) {
-            setSavedUser(userDoc.data() as UserState);
+          const remote = await fetchProgress(emailKey);
+          if (remote?.user) {
+            setSavedUser(remote.user as unknown as UserState);
           } else {
             // Fallback para localStorage apenas se pertencer ao próprio e-mail
             const savedV3 = localStorage.getItem(`alice_progress_v3_${emailKey}`);
@@ -136,18 +136,13 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
       // Set the emulated user directly to initiate authentication and fetch progress
       setEmulatedUser(emailLower);
       
-      // Save/upsert user record in Firestore so Manager Dashboard tracks the user immediately
-      await setDoc(doc(db, 'users', emailLower), {
-        email: emailLower,
-        name: emailLower.split('@')[0],
-        status: 'ativo',
-        pilotStatus: 'ativo',
-        lastAccess: new Date().toISOString()
-      }, { merge: true });
+      // Registra o aluno pela API para que o painel do gestor o enxergue
+      // desde o primeiro acesso.
+      await saveProgress(emailLower, { name: emailLower.split('@')[0] });
 
       setShowNewLogin(false);
     } catch (err: any) {
-      console.error("Erro ao verificar/salvar e-mail no Firestore:", err);
+      console.error("Erro ao registrar o e-mail:", err);
       // Fallback: log in anyway
       setEmulatedUser(emailLower);
       setShowNewLogin(false);
@@ -160,15 +155,9 @@ const RoleSelector: React.FC<RoleSelectorProps> = ({ onSelectRole }) => {
     const emailLower = typedEmail.trim().toLowerCase();
     setEmulatedUser(emailLower);
     try {
-      await setDoc(doc(db, 'users', emailLower), {
-        email: emailLower,
-        name: emailLower.split('@')[0],
-        status: 'ativo',
-        pilotStatus: 'ativo',
-        lastAccess: new Date().toISOString()
-      }, { merge: true });
+      await saveProgress(emailLower, { name: emailLower.split('@')[0] });
     } catch (err) {
-      console.error("Erro ao salvar dados do e-mail no Firestore:", err);
+      console.error("Erro ao registrar o e-mail:", err);
     }
   };
 

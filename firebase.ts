@@ -1,32 +1,67 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup as baseSignInWithPopup, onAuthStateChanged as baseOnAuthStateChanged, signOut as baseSignOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, getDocs, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from './firebase-applet-config.json';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup as baseSignInWithPopup,
+  onAuthStateChanged as baseOnAuthStateChanged,
+  signOut as baseSignOut,
+} from 'firebase/auth';
 
-// Initialize Firebase
+
+/**
+ * Configuração via variáveis de ambiente (VITE_FIREBASE_*).
+ *
+ * Antes o config vinha de firebase-applet-config.json, arquivo que só existe
+ * dentro do AI Studio e é bloqueado pelo .gitignore — o build quebrava em
+ * qualquer outro ambiente. Variáveis de ambiente funcionam nos dois lugares
+ * e são o que a Vercel espera.
+ */
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+  console.error(
+    'Configuração do Firebase ausente. Defina VITE_FIREBASE_API_KEY, ' +
+      'VITE_FIREBASE_PROJECT_ID e demais VITE_FIREBASE_* no .env.local ' +
+      '(ou nas Environment Variables da Vercel).'
+  );
+}
+
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with the specific database ID from config
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
-
-// Initialize Auth
+// O cliente não fala mais com o Firestore: as regras negam acesso do browser
+// e todo dado passa pelas rotas em /api. Só o Auth continua aqui — o que
+// também tira o SDK do Firestore do bundle.
 const baseAuth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope('https://www.googleapis.com/auth/drive');
-googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
-googleProvider.addScope('https://www.googleapis.com/auth/tasks');
-googleProvider.addScope('https://www.googleapis.com/auth/calendar');
+
+// Escopos mínimos. Drive/Sheets/Tasks/Calendar eram pedidos no login e
+// assustam um servidor público sem entregar nada ao produto hoje — pedir
+// só o necessário aumenta a taxa de conclusão do login.
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 let cachedAccessToken: string | null = null;
-
 export const getAccessToken = () => cachedAccessToken;
 export const setAccessToken = (token: string | null) => {
   cachedAccessToken = token;
 };
 
+/**
+ * Identidade "emulada" do piloto: o servidor digita o e-mail e entra sem
+ * senha (authMode OPEN_PILOT).
+ *
+ * ATENÇÃO: esta identidade NÃO é verificada. Ela serve para atribuir
+ * progresso, jamais para autorizar acesso a dados de terceiros. As regras do
+ * Firestore não confiam nela e as rotas administrativas exigem login Google.
+ */
 let emulatedUser: any = null;
 
-// Load emulated user from localStorage on init
 try {
   const savedEmail = localStorage.getItem('alice_emulated_email');
   if (savedEmail) {
@@ -34,11 +69,12 @@ try {
       uid: `emulated_${savedEmail.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_')}`,
       email: savedEmail.toLowerCase(),
       displayName: savedEmail.split('@')[0],
-      emailVerified: true
+      emailVerified: false,
+      isEmulated: true,
     };
   }
 } catch (e) {
-  console.error("Error loading emulated email:", e);
+  console.error('Erro ao carregar e-mail emulado:', e);
 }
 
 const authObservers = new Set<(user: any) => void>();
@@ -51,19 +87,37 @@ export const setEmulatedUser = (email: string | null) => {
       uid: `emulated_${emailLower.replace(/[^a-zA-Z0-9]/g, '_')}`,
       email: emailLower,
       displayName: emailLower.split('@')[0],
-      emailVerified: true
+      emailVerified: false,
+      isEmulated: true,
     };
   } else {
     localStorage.removeItem('alice_emulated_email');
     emulatedUser = null;
   }
-  // Notify observers
-  authObservers.forEach(callback => callback(emulatedUser || baseAuth.currentUser));
+  authObservers.forEach((callback) => callback(emulatedUser || baseAuth.currentUser));
 };
 
 export const getEmulatedUser = () => emulatedUser;
 
-// Wrap auth in a Proxy to dynamically intercept 'currentUser'
+/** true quando a sessão veio de um provedor verificado (Google), não do piloto. */
+export const isVerifiedSession = () =>
+  Boolean(baseAuth.currentUser && !emulatedUser?.isEmulated);
+
+/**
+ * ID token do Firebase para chamar rotas administrativas.
+ * Retorna null numa sessão emulada — que por definição não tem token.
+ */
+export async function getIdToken(): Promise<string | null> {
+  const user = baseAuth.currentUser;
+  if (!user) return null;
+  try {
+    return await user.getIdToken();
+  } catch (err) {
+    console.error('Erro ao obter ID token:', err);
+    return null;
+  }
+}
+
 export const auth = new Proxy(baseAuth, {
   get(target, prop) {
     if (prop === 'currentUser') {
@@ -74,13 +128,11 @@ export const auth = new Proxy(baseAuth, {
       return value.bind(target);
     }
     return value;
-  }
+  },
 });
 
-// Custom onAuthStateChanged to respect both emulated and base auth
 export const onAuthStateChanged = (authInstance: any, callback: (user: any) => void) => {
   authObservers.add(callback);
-  // Trigger callback immediately with the active state
   callback(emulatedUser || baseAuth.currentUser);
 
   const unsub = baseOnAuthStateChanged(baseAuth, (user) => {
@@ -95,34 +147,20 @@ export const onAuthStateChanged = (authInstance: any, callback: (user: any) => v
   };
 };
 
-export const signOut = async (authInstance: any) => {
+export const signOut = async (_authInstance?: any) => {
   setEmulatedUser(null);
   setAccessToken(null);
   return baseSignOut(baseAuth);
 };
 
-export const signInWithPopup = async (authInstance: any, provider: any) => {
+export const signInWithPopup = async (_authInstance: any, provider: any) => {
   const result = await baseSignInWithPopup(baseAuth, provider);
-  if (result.user && result.user.email) {
-    setEmulatedUser(result.user.email);
-  }
   const credential = GoogleAuthProvider.credentialFromResult(result);
   if (credential?.accessToken) {
     setAccessToken(credential.accessToken);
   }
+  // Sessão Google é verificada; não sobrescreve com identidade emulada.
+  setEmulatedUser(null);
   return result;
 };
-
-// Test connection
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log("Firebase connection successful");
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.log("Firebase connection test: Offline mode or sandboxed iframe preview environment. Local simulation fallback enabled.");
-    }
-  }
-}
-testConnection();
 

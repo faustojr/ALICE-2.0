@@ -1,9 +1,182 @@
 rules_version = '2';
+
+// ============================================================================
+// ALICE 2.0 — Regras de segurança do Firestore
+//
+// Princípio: o cliente NÃO escreve dados sensíveis. Toda escrita relevante
+// passa pelas funções serverless (/api/*), que usam o Admin SDK e ignoram
+// estas regras — permitindo validar tenant, papel e cota no servidor.
+//
+// O modo de login por e-mail livre (OPEN_PILOT) não produz identidade
+// verificável, então nada que dependa de "quem é você" pode ser autorizado
+// aqui. Por isso o default é negar.
+// ============================================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow read and write to all collections for the test pilot environment
+
+    // ----------------------------------------------------------------
+    // Helpers
+    // ----------------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function callerEmail() {
+      return isSignedIn() ? request.auth.token.email.lower() : '';
+    }
+
+    // Custom claims gravados pela API ao promover alguém.
+    function callerRole() {
+      return isSignedIn() && 'role' in request.auth.token
+        ? request.auth.token.role
+        : 'ALUNO';
+    }
+
+    function callerTenant() {
+      return isSignedIn() && 'tenantId' in request.auth.token
+        ? request.auth.token.tenantId
+        : '';
+    }
+
+    function isSuperAdmin() {
+      return callerRole() == 'SUPER_ADMIN';
+    }
+
+    function isTenantAdminOf(tenantId) {
+      return callerRole() == 'TENANT_ADMIN' && callerTenant() == tenantId;
+    }
+
+    function isOwnDocument(email) {
+      return isSignedIn() && callerEmail() == email.lower();
+    }
+
+    // ----------------------------------------------------------------
+    // Tenants (prefeituras)
+    // Leitura: super admin, ou o gestor do próprio tenant.
+    // Escrita: exclusivamente via API (Admin SDK).
+    // ----------------------------------------------------------------
+    match /tenants/{tenantId} {
+      allow read: if isSuperAdmin() || isTenantAdminOf(tenantId);
+      allow write: if false;
+
+      match /{subcollection=**} {
+        allow read: if isSuperAdmin() || isTenantAdminOf(tenantId);
+        allow write: if false;
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Memberships — vínculo usuário ↔ prefeitura
+    // O próprio usuário lê o seu vínculo; o gestor lê os do seu tenant.
+    // ----------------------------------------------------------------
+    match /memberships/{membershipId} {
+      allow read: if isSuperAdmin()
+                  || isTenantAdminOf(resource.data.tenantId)
+                  || isOwnDocument(resource.data.email);
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Usuários e progresso
+    // O aluno lê o próprio documento. Escrita só pela API, que valida a
+    // cota e impede que um aluno grave pontos arbitrários.
+    // ----------------------------------------------------------------
+    match /users/{emailKey} {
+      allow read: if isSuperAdmin()
+                  || isOwnDocument(emailKey)
+                  || (callerRole() == 'TENANT_ADMIN'
+                      && resource.data.tenantId == callerTenant());
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Pesquisas do piloto — dados de pesquisa acadêmica.
+    // Nunca legíveis pelo cliente em lote; exportação passa pela API.
+    // ----------------------------------------------------------------
+    match /pilotSurveys/{emailKey} {
+      allow read: if isSuperAdmin() || isOwnDocument(emailKey);
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Trilhas publicadas — conteúdo público de leitura.
+    // ----------------------------------------------------------------
+    // Leitura pelo cliente passa por /api/trails, que filtra pelo plano do
+    // tenant. A regra aqui cobre apenas leitura administrativa direta.
+    match /trails/{trailId} {
+      allow read: if isSuperAdmin()
+                  || isTenantAdminOf(resource.data.tenantId);
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Variantes de módulo — o conteúdo servido ao aluno.
+    // Leitura e escrita passam por /api: a promoção depende de contagem
+    // transacional que o cliente não pode fazer nem influenciar.
+    // ----------------------------------------------------------------
+    match /moduleVariants/{variantId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Acervo de fundos dos reels — metadados de imagens públicas.
+    // ----------------------------------------------------------------
+    match /reelImages/{imageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Grupos (secretarias) — leitura pelo gestor do próprio tenant.
+    // ----------------------------------------------------------------
+    match /groups/{groupId} {
+      allow read: if isSuperAdmin() || isTenantAdminOf(resource.data.tenantId);
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Contratos e faturas — dado comercial da ALICE.
+    // O gestor da prefeitura lê os próprios; ninguém escreve pelo cliente.
+    // ----------------------------------------------------------------
+    match /contracts/{contractId} {
+      allow read: if isSuperAdmin() || isTenantAdminOf(resource.data.tenantId);
+      allow write: if false;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isSuperAdmin() || isTenantAdminOf(resource.data.tenantId);
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Texto da lei — público por natureza (norma federal publicada).
+    // ----------------------------------------------------------------
+    match /lawArticles/{articleId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Telemetria de IA e leads comerciais — somente servidor.
+    // ----------------------------------------------------------------
+    match /aiUsage/{recordId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    match /leads/{leadId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ----------------------------------------------------------------
+    // Default: nega. Coleção nova não nasce aberta.
+    // ----------------------------------------------------------------
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
