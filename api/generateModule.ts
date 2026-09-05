@@ -13,12 +13,13 @@ import {
   checkAiQuota,
   createVariant,
   getTrail,
+  getUser,
   moduleKeyOf,
   recordAiUsage,
   topicForIndex,
 } from '../lib/repositories.js';
 import { generateModuleWithGemini } from '../lib/moduleGenerator.js';
-import type { LearningLevel } from '../types.js';
+import { highestUnlockedLevel, type LearningLevel } from '../types.js';
 
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_PER_WINDOW = 20;
@@ -33,7 +34,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(503).json({ error: 'Serviço de IA não configurado.' });
     }
 
-    const { trail, index, level, failCount, email } = req.body ?? {};
+    const { trail, index, level, failCount, email, wrongAnswerChosen, previousQuestion } =
+      req.body ?? {};
 
     if (!trail) return res.status(400).json({ error: 'Trilha não informada.' });
     if (index === undefined) return res.status(400).json({ error: 'Index não informado.' });
@@ -71,6 +73,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(429).json({ error: quota.reason, quotaExceeded: true });
     }
 
+    // O nível pedido é limitado pelo que os acertos já abriram. O cliente
+    // guarda o nível no localStorage, então sem isto basta editar o navegador
+    // para receber caso concreto sem ter passado pelo repertório — o oposto da
+    // calibragem que a trilha existe para fazer.
+    const student = email ? await getUser(session.email) : null;
+    const unlocked = highestUnlockedLevel(Number(student?.correctAnswersTotal ?? 0));
+    const effectiveLevel: LearningLevel =
+      validLevels.indexOf(level) <= validLevels.indexOf(unlocked) ? level : unlocked;
+
     // O tópico vem da trilha no banco. Sem isso o gerador só saberia produzir
     // conteúdo da Lei 14.133, que era o limite da versão anterior.
     const trailDoc = await getTrail(String(trail));
@@ -80,11 +91,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       {
         trail: trailDoc?.name ?? String(trail),
         index: moduleIndex,
-        level,
+        level: effectiveLevel,
         failCount: Number(failCount) || 0,
         topicTitle: position?.topic.title,
         legalReference: position?.topic.legalReference,
         cycle: position?.cycle,
+        // A alternativa marcada é o diagnóstico do erro. Sem repassá-la aqui,
+        // o bloco de remediação do prompt recebe apenas "houve erro" e volta a
+        // reexplicar o tema inteiro em vez da confusão específica.
+        wrongAnswerChosen:
+          typeof wrongAnswerChosen === 'string' ? wrongAnswerChosen.slice(0, 500) : undefined,
+        previousQuestion:
+          typeof previousQuestion === 'string' ? previousQuestion.slice(0, 1000) : undefined,
       },
       apiKey
     );
@@ -96,9 +114,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let variantId: string | null = null;
     try {
       const variant = await createVariant({
-        moduleKey: moduleKeyOf(String(trail), level, moduleIndex),
+        moduleKey: moduleKeyOf(String(trail), effectiveLevel, moduleIndex),
         trail: String(trail),
-        level,
+        level: effectiveLevel,
         moduleIndex,
         variationId: module.variationId,
         content: {
@@ -124,13 +142,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tenantId: session.tenantId ?? 'sem-tenant',
       email: session.email,
       trail: String(trail),
-      level,
+      level: effectiveLevel,
       moduleIndex,
       model,
       cacheHit: false,
     }).catch((err) => console.error('[aiUsage] falha ao registrar telemetria', err));
 
-    return res.json({ ...module, variantId });
+    // `levelServed` avisa o app quando o nível pedido foi rebaixado, para ele
+    // corrigir o próprio estado em vez de seguir exibindo um nível que não tem.
+    return res.json({ ...module, variantId, levelServed: effectiveLevel });
   } catch (err) {
     return handleError(res, err, 'generateModule');
   }

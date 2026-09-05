@@ -15,12 +15,6 @@ import { highestUnlockedLevel, type LearningLevel } from '../types.js';
 
 const LEVELS: LearningLevel[] = ['Básico', 'Intermediário', 'Especialista'];
 
-/**
- * Pontos crescem apenas dentro de um teto por requisição. Sem isso, um
- * cliente adulterado poderia gravar um placar arbitrário.
- */
-const MAX_POINTS_DELTA = 500;
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
 
@@ -76,23 +70,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      const currentPoints = Number(existing?.points ?? 0);
-      const incomingPoints = Number(progress.points ?? currentPoints);
-
-      // Nunca retrocede e nunca salta além do teto por requisição.
-      const points = Math.max(
-        currentPoints,
-        Math.min(incomingPoints, currentPoints + MAX_POINTS_DELTA)
-      );
-
-      // O nível pedido é limitado pelo que o desempenho já abriu: sem isso, o
-      // aluno pularia direto para Especialista e receberia conteúdo acima da
-      // faixa produtiva de desafio.
+      // Pontuação e acertos acumulados NÃO entram por aqui. Quem os escreve é
+      // /api/quizResult, que aplica o peso cognitivo do acerto. Aceitar o
+      // número do cliente aqui apagaria essa ponderação — ele conta 100 por
+      // acerto e não conhece a demanda da questão.
       const unlocked = highestUnlockedLevel(
-        Math.max(
-          Number(existing?.correctAnswersTotal ?? 0),
-          Number(progress.correctAnswersTotal ?? 0)
-        )
+        Number(existing?.correctAnswersTotal ?? 0)
       );
 
       const requested = LEVELS.includes(progress.currentLevel)
@@ -105,7 +88,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await upsertUser(session.email, {
         name: progress.name || existing?.name || session.email.split('@')[0],
         tenantId: tenantId ?? existing?.tenantId ?? null,
-        points,
         level: Number(progress.level) || existing?.level || 1,
         currentLevel: level,
         currentTrail: progress.currentTrail ?? existing?.currentTrail ?? null,
@@ -113,16 +95,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         highestModuleIndex: Math.max(
           Number(existing?.highestModuleIndex ?? 0),
           Number(progress.highestModuleIndex ?? 0)
-        ),
-        quizCount: Math.max(
-          Number(existing?.quizCount ?? 0),
-          Number(progress.quizCount ?? 0)
-        ),
-        // Acertos acumulados controlam o desbloqueio de nível, então nunca
-        // retrocedem: um cliente que reenvie estado antigo não rebaixa o aluno.
-        correctAnswersTotal: Math.max(
-          Number(existing?.correctAnswersTotal ?? 0),
-          Number(progress.correctAnswersTotal ?? 0)
         ),
         correctQuizzesCount: progress.correctQuizzesCount ?? existing?.correctQuizzesCount,
         completedQuizzes: Array.isArray(progress.completedQuizzes)
@@ -138,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       return res.json({
         ok: true,
-        points,
+        points: Number(existing?.points ?? 0),
         tenantId,
         seatWarning,
         unlockedLevel: unlocked,

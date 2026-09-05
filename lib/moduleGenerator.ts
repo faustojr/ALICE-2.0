@@ -63,11 +63,33 @@ export const COGNITIVE_WEIGHTS: Record<CognitiveLevel, number> = {
   CRIAR: 2.0,
 };
 
-/** Demanda cognitiva esperada de cada nível da trilha. */
+/**
+ * Demanda cognitiva esperada de cada nível da trilha.
+ *
+ * A trilha tem três degraus, nesta ordem: **conhecer** o conteúdo, depois
+ * **compreendê-lo**, e por fim **resolver situações-problema** com ele. Os
+ * três primeiros processos de Bloom se distribuem nos dois primeiros degraus;
+ * o terceiro degrau concentra aplicar, analisar e avaliar, porque é onde o
+ * servidor decide em vez de responder.
+ *
+ * CRIAR fica de fora: com três alternativas não há como avaliar honestamente
+ * a proposta de um encaminhamento — a questão viraria reconhecimento
+ * disfarçado, e o peso 2,0 premiaria um acerto que não houve.
+ */
 const EXPECTED_COGNITIVE: Record<LearningLevel, CognitiveLevel[]> = {
-  Básico: ['LEMBRAR', 'ENTENDER'],
-  Intermediário: ['APLICAR', 'ANALISAR'],
-  Especialista: ['AVALIAR', 'CRIAR'],
+  Básico: ['LEMBRAR'],
+  Intermediário: ['ENTENDER'],
+  Especialista: ['APLICAR', 'ANALISAR', 'AVALIAR'],
+};
+
+/** O que cada degrau da trilha significa, na linguagem do produto. */
+const LEVEL_INTENT: Record<LearningLevel, string> = {
+  Básico:
+    'CONHECER o conteúdo — o servidor precisa reconhecer o dispositivo, o prazo, o valor, a competência. Ainda não se pede interpretação.',
+  Intermediário:
+    'COMPREENDER o conteúdo — o servidor precisa explicar a regra com as próprias palavras, exemplificar, classificar um caso na hipótese certa. Ainda não se pede decisão.',
+  Especialista:
+    'RESOLVER SITUAÇÕES-PROBLEMA — o servidor recebe um caso concreto e precisa decidir o que fazer, distinguir hipóteses próximas ou julgar se uma decisão foi regular. É aqui que ele responde pelo que assina.',
 };
 
 export interface GenerateModuleInput {
@@ -214,7 +236,12 @@ feedbackWrong — ACOLHA E REDIRECIONE, sem sinalizar deficiência.
    servidor real cometeria, não absurdos descartáveis.
 ${remediation}
 ━━━ DEMANDA COGNITIVA ━━━
-Este módulo é nível "${level}", então a questão deve exigir ${expected}
+A trilha tem três degraus: conhecer o conteúdo, compreendê-lo, e resolver
+situações-problema com ele. Este módulo é o degrau "${level}".
+
+O QUE ESTE DEGRAU PEDE: ${LEVEL_INTENT[level]}
+
+Portanto a questão deve exigir ${expected}
 (Taxonomia de Bloom Revisada — Anderson e Krathwohl, 2001):
 
 - LEMBRAR   — reconhecer ou recordar definição, prazo, competência

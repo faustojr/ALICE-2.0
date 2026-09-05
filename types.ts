@@ -313,6 +313,33 @@ export function highestUnlockedLevel(correctAnswers: number): LearningLevel {
   return 'Básico';
 }
 
+/**
+ * Avanço dentro do degrau atual, em fração de 0 a 1.
+ *
+ * Vive aqui porque a barra do app e o painel do gestor precisam concordar
+ * sobre o que "78% do nível" significa. Quando cada tela calculava por conta
+ * própria, a barra enchia num ritmo e o desbloqueio acontecia em outro.
+ */
+export function levelProgress(correctAnswers: number): {
+  floor: number;
+  ceiling: number | null;
+  fraction: number;
+} {
+  const { Intermediário, Especialista } = LEVEL_UNLOCK_CORRECT_ANSWERS;
+
+  if (correctAnswers >= Especialista) {
+    return { floor: Especialista, ceiling: null, fraction: 1 };
+  }
+  const [floor, ceiling] =
+    correctAnswers >= Intermediário ? [Intermediário, Especialista] : [0, Intermediário];
+
+  return {
+    floor,
+    ceiling,
+    fraction: Math.min(1, Math.max(0, (correctAnswers - floor) / (ceiling - floor))),
+  };
+}
+
 /** Faixa de carreira correspondente ao XP acumulado. */
 export function careerTier(points: number): 'Aprendiz' | 'Iniciante' | 'Intermediário' | 'Especialista' {
   if (points >= XP_TIERS.ESPECIALISTA) return 'Especialista';
@@ -416,6 +443,12 @@ export interface UserState {
     Especialista: number;
   };
   points: number;
+  /**
+   * Acertos acumulados na trajetória inteira — o contador que abre os níveis.
+   * Diferente de `correctQuizzesCount`, que é por nível e serve a relatório.
+   * Escrito só pelo servidor (/api/quizResult); aqui é espelho.
+   */
+  correctAnswersTotal?: number;
   level: number;
   badges?: string[];
   feedbackNeeded: boolean;

@@ -19,7 +19,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCors, clientIp, handleError, methodNotAllowed, rateLimit } from '../lib/http.js';
 import { resolveUnverifiedStudent } from '../lib/auth.js';
-import { getUser, recordVariantOutcome } from '../lib/repositories.js';
+import { recordQuizOutcome, recordVariantOutcome } from '../lib/repositories.js';
 import { COGNITIVE_WEIGHTS, type CognitiveLevel } from '../lib/moduleGenerator.js';
 import {
   BASE_QUIZ_POINTS,
@@ -54,10 +54,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const weight = COGNITIVE_WEIGHTS[level] ?? 1.0;
     const pointsAwarded = correct ? Math.round(BASE_QUIZ_POINTS * weight) : 0;
 
-    // Estado atual do aluno decide se este acerto abriu uma camada nova.
-    const user = (await getUser(session.email)) as Record<string, any> | null;
-    const correctBefore = Number(user?.correctAnswersTotal ?? 0);
-    const correctAfter = correctBefore + (correct ? 1 : 0);
+    // Grava o acerto e a pontuação ponderada. É aqui que a progressão passa a
+    // existir: `correctAnswersTotal` é o contador que abre os níveis, e ele
+    // não chega por nenhum outro caminho — o cliente não o envia, e não deve.
+    const totals = await recordQuizOutcome(session.email, {
+      correct,
+      pointsAwarded,
+    });
+
+    const correctAfter = totals.correctAnswersTotal;
+    const correctBefore = correctAfter - (correct ? 1 : 0);
 
     const levelBefore = highestUnlockedLevel(correctBefore);
     const levelAfter = highestUnlockedLevel(correctAfter);
@@ -97,11 +103,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cognitiveLevel: COGNITIVE_WEIGHTS[level] ? level : null,
       progression: {
         correctAnswersTotal: correctAfter,
+        totalPoints: totals.points,
         unlockedLevel: levelAfter,
         levelUnlockedNow: levelAfter !== levelBefore,
         nextLevelAt: nextThreshold,
         remainingToNextLevel: nextThreshold ? Math.max(0, nextThreshold - correctAfter) : null,
-        careerTier: careerTier(Number(user?.points ?? 0) + pointsAwarded),
+        careerTier: careerTier(totals.points),
       },
     });
   } catch (err) {

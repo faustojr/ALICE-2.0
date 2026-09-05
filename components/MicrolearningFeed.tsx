@@ -22,51 +22,57 @@ import {
   Download
 } from 'lucide-react';
 import { generateReelsModule } from '../services/geminiService';
-import type { ModuleContent, UserState } from '../types';
+import { gradientFallback, loadReelImages, pickImage } from '../services/reelImages';
+import { levelProgress, type LearningLevel, type ModuleContent, type UserState } from '../types';
 import { auth } from '../firebase';
 import { fetchProgress, reportQuizResult, saveProgress, submitSurvey } from '../services/studentApi';
 
-const LazyImage: React.FC<{ src: string, alt: string, opacity: number, priority?: boolean }> = ({ src, alt, opacity, priority }) => {
-  const [isIntersecting, setIntersecting] = useState(priority);
+/**
+ * Fundo de um slide do reel.
+ *
+ * Três decisões de desempenho, todas voltadas ao celular de rede ruim que é o
+ * aparelho real do servidor municipal:
+ *
+ * 1. **O gradiente entra atrás da foto, não no lugar dela.** A tela nunca
+ *    aparece preta esperando o download: o degradê é um data URI, custa zero
+ *    de rede, e a foto surge por cima quando chega.
+ * 2. **Só o primeiro slide é prioritário.** Os outros dois baixam em segunda
+ *    prioridade (`fetchPriority="low"`), sem disputar banda com o slide que o
+ *    servidor está lendo agora. São 3 imagens de ~80 kB por módulo — cabe
+ *    baixar todas, mas não ao mesmo tempo.
+ * 3. **A transição é CSS, não JavaScript.** Trocar `motion.img` por uma
+ *    transição de opacidade tira três animações controladas por JS da rolagem
+ *    com scroll-snap, que é justamente o momento em que o aparelho está mais
+ *    ocupado.
+ */
+const SlideBackground: React.FC<{
+  src: string;
+  fallback: string;
+  opacity: number;
+  priority?: boolean;
+}> = ({ src, fallback, opacity, priority }) => {
   const [loaded, setLoaded] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (priority) return;
-    
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIntersecting(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '400px' } // Carrega um pouco antes para suavidade
-    );
-
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
-
-    return () => observer.disconnect();
-  }, [priority]);
 
   return (
-    <div ref={containerRef} className="absolute inset-0 bg-slate-950">
-      {isIntersecting && (
-        <motion.img
-          src={src}
-          alt={alt}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: loaded ? opacity : 0 }}
-          transition={{ duration: 1 }}
-          onLoad={() => setLoaded(true)}
-          className="w-full h-full object-cover"
-          referrerPolicy="no-referrer"
-          loading={priority ? "eager" : "lazy"}
-          decoding="async"
-        />
-      )}
+    <div
+      className="absolute inset-0 bg-slate-950 bg-cover bg-center"
+      style={{ backgroundImage: `url("${fallback}")` }}
+    >
+      <img
+        src={src}
+        alt=""
+        aria-hidden="true"
+        width={600}
+        height={900}
+        onLoad={() => setLoaded(true)}
+        onError={() => setLoaded(false)}
+        className="w-full h-full object-cover transition-opacity duration-700 ease-out"
+        style={{ opacity: loaded ? opacity : 0 }}
+        referrerPolicy="no-referrer"
+        loading={priority ? 'eager' : 'lazy'}
+        fetchPriority={priority ? 'high' : 'low'}
+        decoding="async"
+      />
     </div>
   );
 };
@@ -103,7 +109,10 @@ const MicrolearningFeed: React.FC<{
         Intermediário: 0,
         Especialista: 0
       },
-      points: 1250,
+      // Zero. O placar inicial de 1250 dava ao servidor uma faixa de carreira
+      // que ele não conquistou — o oposto de tratar o acerto como evidência.
+      points: 0,
+      correctAnswersTotal: 0,
       level: 1,
       currentFailCount: 0,
       feedbackNeeded: false,
@@ -120,15 +129,25 @@ const MicrolearningFeed: React.FC<{
     return defaults;
   });
 
-  // Devolvidos pelo servidor a cada resposta: o ganho real do acerto e a
-  // situação de desbloqueio, para o app celebrar no momento em que acontece.
+  /**
+   * Progressão vinda do servidor. É a única fonte da verdade sobre pontuação e
+   * desbloqueio: o cliente não sabe o peso cognitivo da questão que acabou de
+   * responder, então qualquer contagem feita aqui estaria errada.
+   */
   const [progression, setProgression] = useState<{
-    unlockedLevel: string;
+    correctAnswersTotal: number;
+    totalPoints: number;
+    unlockedLevel: LearningLevel;
     levelUnlockedNow: boolean;
+    nextLevelAt: number | null;
     remainingToNextLevel: number | null;
     careerTier: string;
   } | null>(null);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
+
+  const correctTotal = progression?.correctAnswersTotal ?? userState.correctAnswersTotal ?? 0;
+  const bar = levelProgress(correctTotal);
+  const displayPoints = progression?.totalPoints ?? userState.points;
 
   const [showPostSurvey, setShowPostSurvey] = useState(startWithPostSurvey);
   const [surveyAnswers, setSurveyAnswers] = useState({
@@ -242,6 +261,7 @@ const MicrolearningFeed: React.FC<{
                 currentSlideIndex: typeof data.currentSlideIndex === 'number' ? data.currentSlideIndex : prev.currentSlideIndex,
                 highestModuleIndex: typeof data.highestModuleIndex === 'number' ? data.highestModuleIndex : prev.highestModuleIndex,
                 correctQuizzesCount: data.correctQuizzesCount || prev.correctQuizzesCount,
+                correctAnswersTotal: typeof data.correctAnswersTotal === 'number' ? data.correctAnswersTotal : prev.correctAnswersTotal,
                 quizCount: typeof data.quizCount === 'number' ? data.quizCount : prev.quizCount,
                 lastStudyDate: data.lastStudyDate || prev.lastStudyDate,
                 streakDays: typeof data.streakDays === 'number' ? data.streakDays : prev.streakDays,
@@ -290,9 +310,11 @@ const MicrolearningFeed: React.FC<{
       if (!user?.email) return;
 
       const emailKey = user.email.toLowerCase();
+      // `points` e `correctAnswersTotal` não vão nesta requisição de propósito:
+      // /api/quizResult é o dono desses dois números. Enviá-los daqui
+      // sobrescreveria a pontuação ponderada com a contagem simples do cliente.
       const result = await saveProgress(emailKey, {
         name: user.displayName || `Aluno ${initialLevel}`,
-        points: stateToSave.points,
         currentLevel: stateToSave.currentLevel,
         currentModuleIndex: stateToSave.currentModuleIndex,
         currentSlideIndex: stateToSave.currentSlideIndex,
@@ -344,12 +366,6 @@ const MicrolearningFeed: React.FC<{
     userState.streakDays,
     initialLevel
   ]);
-
-  const LEVEL_REQUIREMENTS = {
-    'Básico': 15, // Reduzi para ser mais dinâmico
-    'Intermediário': 30,
-    'Especialista': 50
-  };
 
   const [currentModule, setCurrentModule] = useState<ModuleContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -446,6 +462,41 @@ const MicrolearningFeed: React.FC<{
     fetchModule(userState.currentModuleIndex, userState.currentLevel);
   }, [userState.currentModuleIndex, userState.currentLevel]);
 
+  /**
+   * Aquece as imagens do módulo seguinte enquanto o servidor lê o atual.
+   *
+   * O aluno passa ~3 minutos em cada módulo; a rede fica ociosa quase todo
+   * esse tempo. Buscar as próximas imagens em `requestIdleCallback` faz o
+   * avanço de módulo aparecer instantâneo sem tirar banda de quem está lendo.
+   * Só as imagens — o texto do próximo módulo pode chamar a IA, e antecipá-lo
+   * gastaria geração que o aluno talvez nunca veja.
+   */
+  useEffect(() => {
+    if (isOffline) return;
+
+    // Safari só ganhou requestIdleCallback tarde. As funções precisam ficar
+    // ligadas a `window`: extraídas soltas, o navegador recusa a chamada.
+    const hasIdle = typeof window.requestIdleCallback === 'function';
+    const idle = (cb: () => void) =>
+      hasIdle ? window.requestIdleCallback(cb) : window.setTimeout(cb, 2000);
+    const cancelIdle = (id: number) =>
+      hasIdle ? window.cancelIdleCallback(id) : window.clearTimeout(id);
+
+    const handle = idle(() => {
+      loadReelImages().then((images) => {
+        if (images.length === 0) return;
+        const base = (userState.currentModuleIndex + 1) * 3;
+        for (let i = 0; i < 3; i++) {
+          const img = new Image();
+          img.decoding = 'async';
+          img.src = pickImage(images, base + i);
+        }
+      });
+    });
+
+    return () => cancelIdle(handle as number);
+  }, [userState.currentModuleIndex, isOffline]);
+
   // Robust resumption and reset of scroll position
   useEffect(() => {
     if (!loading && currentModule && containerRef.current) {
@@ -497,9 +548,31 @@ const MicrolearningFeed: React.FC<{
         currentModule?.cognitiveLevel
       )
         .then((result) => {
-          if (result?.progression) {
-            setProgression(result.progression);
-            setLastPoints(result.pointsAwarded);
+          if (!result?.progression) return;
+          setProgression(result.progression);
+          setLastPoints(result.pointsAwarded);
+
+          // O placar e o nível vêm do servidor, que conhece o peso cognitivo
+          // do acerto. O cliente só espelha.
+          setUserState((prev) => ({
+            ...prev,
+            points: result.progression.totalPoints,
+            correctAnswersTotal: result.progression.correctAnswersTotal,
+          }));
+
+          // O desbloqueio é do servidor, não uma contagem local. Só aqui a
+          // trilha muda de degrau.
+          if (result.progression.levelUnlockedNow) {
+            setUserState((prev) => ({
+              ...prev,
+              currentLevel: result.progression.unlockedLevel,
+              currentModuleIndex: 0,
+              currentSlideIndex: 0,
+            }));
+            setShowQuiz(false);
+            setQuizAnswered(false);
+            setSelectedOption(null);
+            setShowLevelUp(true);
           }
         })
         .catch((err) => console.error('Falha ao reportar resultado do quiz:', err));
@@ -509,10 +582,9 @@ const MicrolearningFeed: React.FC<{
       setUserState(prev => {
         const newCorrectCount = { ...prev.correctQuizzesCount };
         newCorrectCount[prev.currentLevel] += 1;
-        
-        return { 
-          ...prev, 
-          points: prev.points + 100,
+
+        return {
+          ...prev,
           quizCount: prev.quizCount + 1,
           correctQuizzesCount: newCorrectCount,
           currentFailCount: 0,
@@ -566,21 +638,9 @@ const MicrolearningFeed: React.FC<{
     setQuizAnswered(false);
     setSelectedOption(null);
     
-    const currentCorrect = userState.correctQuizzesCount[userState.currentLevel];
-    const required = LEVEL_REQUIREMENTS[userState.currentLevel];
-
-    // Check for Level Up - Only if we just finished a module and reached the requirement
-    if (currentCorrect >= required) {
-      if (userState.currentLevel === 'Básico') {
-        setUserState(prev => ({ ...prev, currentLevel: 'Intermediário', currentModuleIndex: 0, currentSlideIndex: 0 }));
-        setShowLevelUp(true);
-        return;
-      } else if (userState.currentLevel === 'Intermediário') {
-        setUserState(prev => ({ ...prev, currentLevel: 'Especialista', currentModuleIndex: 0, currentSlideIndex: 0 }));
-        setShowLevelUp(true);
-        return;
-      }
-    }
+    // O desbloqueio de nível NÃO é decidido aqui. Quem decide é o servidor, em
+    // handleQuizAnswer, a partir dos acertos acumulados. Contar de novo neste
+    // ponto foi o que fez a barra encher num ritmo e o nível abrir em outro.
 
     // Verifica se precisa de feedback (cada 10 quizzes)
     if (userState.quizCount > 0 && userState.quizCount % 10 === 0) {
@@ -917,12 +977,12 @@ const MicrolearningFeed: React.FC<{
           <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
               <Zap className="w-3.5 h-3.5 sm:w-4 h-4 text-yellow-400 fill-yellow-400" />
-              <span className="text-white font-bold text-xs sm:text-sm">{userState.points}</span>
+              <span className="text-white font-bold text-xs sm:text-sm">{displayPoints}</span>
             </div>
             <div className="w-16 sm:w-20 h-1 bg-white/20 rounded-full mt-1 overflow-hidden">
-              <div 
-                className="h-full bg-yellow-400 transition-all duration-500" 
-                style={{ width: `${(userState.correctQuizzesCount[userState.currentLevel] / LEVEL_REQUIREMENTS[userState.currentLevel]) * 100}%` }}
+              <div
+                className="h-full bg-yellow-400 transition-all duration-500"
+                style={{ width: `${bar.fraction * 100}%` }}
               ></div>
             </div>
           </div>
@@ -951,9 +1011,9 @@ const MicrolearningFeed: React.FC<{
             className="h-screen w-full snap-start relative flex items-center justify-center p-6"
           >
             {/* Background Image */}
-            <LazyImage 
-              src={slide.imageUrl} 
-              alt="Background" 
+            <SlideBackground
+              src={slide.imageUrl}
+              fallback={gradientFallback(userState.currentModuleIndex * 3 + index)}
               opacity={0.4}
               priority={index === 0}
             />
@@ -1032,7 +1092,14 @@ const MicrolearningFeed: React.FC<{
                   <Zap className="w-6 h-6 sm:w-8 h-8 text-blue-400" />
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-white mb-2">Desafio Rápido</h3>
-                <p className="text-gray-400 text-xs sm:text-sm">Responda corretamente para ganhar +100 XP</p>
+                {/* O ganho varia com a demanda cognitiva da questão, então
+                    prometer "+100 XP" aqui seria mentira em dois dos três
+                    degraus da trilha. */}
+                <p className="text-gray-400 text-xs sm:text-sm">
+                  {userState.currentLevel === 'Especialista'
+                    ? 'Caso concreto: vale pontuação ponderada'
+                    : 'Responda corretamente para ganhar XP'}
+                </p>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-[2rem] p-5 sm:p-6 mb-5 sm:mb-6">
@@ -1203,13 +1270,13 @@ const MicrolearningFeed: React.FC<{
                 <div className="flex justify-between text-xs sm:text-sm mb-2">
                   <span className="text-gray-400">Nível {userState.currentLevel}</span>
                   <span className="text-blue-400 font-bold">
-                    {Math.round((userState.correctQuizzesCount[userState.currentLevel] / LEVEL_REQUIREMENTS[userState.currentLevel]) * 100)}%
+                    {Math.round(bar.fraction * 100)}%
                   </span>
                 </div>
                 <div className="w-full h-1.5 sm:h-2 bg-slate-800 rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-blue-500 rounded-full transition-all"
-                    style={{ width: `${(userState.correctQuizzesCount[userState.currentLevel] / LEVEL_REQUIREMENTS[userState.currentLevel]) * 100}%` }}
+                    style={{ width: `${bar.fraction * 100}%` }}
                   />
                 </div>
               </div>

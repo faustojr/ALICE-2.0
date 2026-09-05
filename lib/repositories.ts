@@ -207,6 +207,43 @@ export async function getUser(email: string) {
   return snap.exists ? snap.data() : null;
 }
 
+/**
+ * Registra o resultado de um quiz no documento do aluno.
+ *
+ * Incremento atômico, e não leitura-soma-escrita: o aluno responde de um
+ * dispositivo enquanto o `saveProgress` com debounce ainda está em voo do
+ * outro, e uma escrita baseada em leitura perderia o acerto.
+ *
+ * Estes dois campos são a fonte da verdade da progressão. `correctAnswersTotal`
+ * decide o desbloqueio de nível; `points` é o placar ponderado por demanda
+ * cognitiva. Nenhum dos dois vem do cliente.
+ */
+export async function recordQuizOutcome(
+  email: string,
+  { correct, pointsAwarded }: { correct: boolean; pointsAwarded: number }
+): Promise<{ correctAnswersTotal: number; points: number }> {
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.users).doc(emailKey(email));
+
+  await ref.set(
+    {
+      email: emailKey(email),
+      correctAnswersTotal: FieldValue.increment(correct ? 1 : 0),
+      points: FieldValue.increment(pointsAwarded),
+      quizCount: FieldValue.increment(1),
+      lastAccess: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+
+  const snap = await ref.get();
+  const data = snap.data() ?? {};
+  return {
+    correctAnswersTotal: Number(data.correctAnswersTotal ?? 0),
+    points: Number(data.points ?? 0),
+  };
+}
+
 export async function listTenantUsers(tenantId: string) {
   const db = getDb();
   const snap = await db

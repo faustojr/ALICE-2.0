@@ -191,6 +191,8 @@ export interface QuizResultResponse {
   cognitiveLevel: string | null;
   progression: {
     correctAnswersTotal: number;
+    /** Placar acumulado depois deste acerto, já ponderado pelo peso cognitivo. */
+    totalPoints: number;
     unlockedLevel: 'Básico' | 'Intermediário' | 'Especialista';
     levelUnlockedNow: boolean;
     nextLevelAt: number | null;
