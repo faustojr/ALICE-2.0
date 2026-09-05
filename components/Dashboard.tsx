@@ -10,6 +10,7 @@ import {
   fetchManagerOverview,
   ManagerApiError,
   type ManagerMember,
+  type ManagerOverview,
   type ManagerSurvey,
 } from '../services/managerApi';
 
@@ -86,23 +87,22 @@ const SERVER_DATA: UserPerformance[] = [
     },
 ];
 
-const KPI_DATA = [
-    { title: "Absorção Geral", value: "82%", change: "+5.2%", changeType: "increase" as const },
-    { title: "Precisão nos Quizzes", value: "89%", change: "+3.1%", changeType: "increase" as const },
-    { title: "Ritmo de Estudo", value: "4.5/sem", change: "-0.5", changeType: "decrease" as const }
-];
-
 // --- COMPONENTS ---
 
-const KPICard: React.FC<{ title: string; value: string; change?: string; changeType?: 'increase' | 'decrease', dark?: boolean }> = ({ title, value, change, changeType, dark = true }) => (
+/**
+ * Cartão de indicador.
+ *
+ * A variação "vs. mês passado" saiu junto com os valores fixos que a
+ * alimentavam: não há série histórica gravada para calculá-la, e exibir uma
+ * seta verde inventada é pior que não exibir nada. No lugar entra uma legenda
+ * que explica o que o número mede.
+ */
+const KPICard: React.FC<{ title: string; value: string; hint?: string; dark?: boolean }> = ({ title, value, hint, dark = true }) => (
   <div className={`${dark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-800'} border p-4 sm:p-6 rounded-xl`}>
     <h3 className={`${dark ? 'text-slate-400' : 'text-gray-500'} text-sm font-medium mb-2`}>{title}</h3>
-    <p className="text-3xl font-bold mb-2">{value}</p>
-    {change && (
-        <div className="flex items-center">
-            <span className={`text-sm font-semibold ${changeType === 'increase' ? 'text-green-500' : 'text-red-500'}`}>{change}</span>
-            <span className={`${dark ? 'text-slate-500' : 'text-gray-400'} text-sm ml-2`}>vs. mês passado</span>
-        </div>
+    <p className="text-3xl font-bold mb-2 tabular-nums">{value}</p>
+    {hint && (
+      <p className={`${dark ? 'text-slate-500' : 'text-gray-400'} text-xs leading-snug`}>{hint}</p>
     )}
   </div>
 );
@@ -354,10 +354,29 @@ const ReportPreview: React.FC<{ config: any, onClose: () => void, users: UserPer
                     <h2 className="text-lg font-bold border-l-4 border-blue-600 pl-3 mb-6 uppercase">Painel de Indicadores</h2>
                     
                     {/* Linha 1: KPIs Gerais */}
+                    {/* Este relatório é impresso e anexado a processo. "Absorção
+                        Geral 85%" e "Precisão Quizzes 91%" eram constantes: saíam
+                        idênticas para todo servidor, inclusive um que nunca abriu
+                        o app. Substituídas pelo que de fato é medido. */}
                     <div className="grid grid-cols-3 gap-6 mb-6">
-                        <KPICard title="Absorção Geral" value="85%" dark={false} />
-                        <KPICard title="Precisão Quizzes" value="91%" dark={false} />
-                        <KPICard title="Pontuação Total" value={data.points.toString()} dark={false} />
+                        <KPICard
+                            title="Acerto de primeira"
+                            value={memberFirstTry(data as any) === null ? 'Sem dados' : `${memberFirstTry(data as any)}%`}
+                            hint="Questões resolvidas sem recapitular"
+                            dark={false}
+                        />
+                        <KPICard
+                            title="Quizzes respondidos"
+                            value={String((data as any).quizCount ?? 0)}
+                            hint="Inclui retentativas"
+                            dark={false}
+                        />
+                        <KPICard
+                            title="Pontuação Total"
+                            value={data.points.toString()}
+                            hint="Ponderada pela demanda cognitiva"
+                            dark={false}
+                        />
                     </div>
 
                     {/* Linha 2: Hábitos e Soft Skills */}
@@ -462,14 +481,47 @@ const ReportPreview: React.FC<{ config: any, onClose: () => void, users: UserPer
 };
 
 
+/**
+ * Cor da taxa de acerto de primeira.
+ *
+ * As faixas existem para o gestor agir, não para enfeitar: abaixo de 50% o
+ * servidor está chegando ao acerto por insistência, e é aí que capacitação
+ * presencial rende. `null` (ninguém respondeu ainda) fica neutro — não é
+ * desempenho ruim, é ausência de dado.
+ */
+function firstTryColor(rate: number | null): string {
+  if (rate === null) return 'text-slate-500';
+  if (rate >= 70) return 'text-emerald-400';
+  if (rate >= 50) return 'text-amber-400';
+  return 'text-red-400';
+}
+
+/** Taxa de acerto de primeira de um servidor, ou null se ele ainda não respondeu. */
+function memberFirstTry(user: { firstAttempts?: number; firstAttemptsCorrect?: number }): number | null {
+  const attempts = Number(user.firstAttempts) || 0;
+  if (attempts === 0) return null;
+  return Math.round(((Number(user.firstAttemptsCorrect) || 0) / attempts) * 100);
+}
+
 const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
   const [currentView, setCurrentView] = useState<DashboardView>('MAIN');
   const [rankingFilter, setRankingFilter] = useState('Geral');
   const [serverData, setServerData] = useState<UserPerformance[]>([]);
   const [surveyData, setSurveyData] = useState<ManagerSurvey[]>([]);
   const [groupPerformance, setGroupPerformance] = useState<
-    { id: string; name: string; members: number; active30d: number; averagePoints: number; totalQuizzes: number }[]
+    {
+      id: string;
+      name: string;
+      members: number;
+      active30d: number;
+      averagePoints: number;
+      totalQuizzes: number;
+      firstTryRate: number | null;
+    }[]
   >([]);
+  /** Acerto de primeira da prefeitura inteira. `null` = ninguém respondeu ainda. */
+  const [firstTryRate, setFirstTryRate] = useState<number | null>(null);
+  const [summary, setSummary] = useState<ManagerOverview['summary'] | null>(null);
   const [ungroupedCount, setUngroupedCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [accessError, setAccessError] = useState<{ message: string; status: number } | null>(null);
@@ -491,6 +543,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
       setServerData(overview.members as unknown as UserPerformance[]);
       setSurveyData(overview.surveys);
       setGroupPerformance(overview.groups ?? []);
+      setFirstTryRate(overview.firstTryRate ?? null);
+      setSummary(overview.summary ?? null);
       setUngroupedCount(overview.ungroupedMembers ?? 0);
     } catch (err) {
       if (err instanceof ManagerApiError) {
@@ -538,19 +592,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
     csvContent += `Filtro Aplicado: ${rankingFilter}\n\n`;
 
     // Seção de KPIs
+    // Os KPIs reais do painel. Este arquivo vai para o secretário e para o
+    // Tribunal de Contas — número inventado aqui é o pior lugar possível.
     csvContent += "INDICADORES CHAVE (KPIs)\n";
-    csvContent += "Indicador,Valor,Variacao\n";
-    KPI_DATA.forEach(kpi => {
-        csvContent += `${kpi.title},${kpi.value},${kpi.change}\n`;
+    csvContent += "Indicador,Valor\n";
+    kpiData.forEach(kpi => {
+        csvContent += `${kpi.title},${kpi.value}\n`;
     });
     csvContent += "\n";
 
     // Seção de Ranking
     csvContent += `RANKING DE SERVIDORES - ${rankingFilter.toUpperCase()}\n`;
-    csvContent += "Posicao,Nome,Area,Pontos,Melhor Tema,Nivel Soft Skills,Ultimo Acesso\n";
+    csvContent += "Posicao,Nome,Area,Pontos,Acerto de 1a (%),Melhor Tema,Nivel Soft Skills,Ultimo Acesso\n";
     filteredRanking.forEach((user, index) => {
         const score = rankingFilter === 'Geral' ? user.points : (user.specialties as any)[rankingFilter] || 0;
-        csvContent += `${index + 1},${user.name},${user.area},${score},${user.bestTopic},${user.softSkillsLevel},${(user as any).lastAccess || 'N/A'}\n`;
+        const firstTry = memberFirstTry(user);
+        csvContent += `${index + 1},${user.name},${user.area},${score},${firstTry ?? 'sem dados'},${user.bestTopic},${user.softSkillsLevel},${(user as any).lastAccess || 'N/A'}\n`;
     });
 
     // Criar Blob e Download
@@ -578,11 +635,34 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
     return <SoftSkillsManager onBack={() => setCurrentView('MAIN')} />;
   }
 
-  const kpiData = useMemo(() => [
-    { title: "Usuários Ativos", value: serverData.length.toString(), change: "+1", changeType: "increase" as const },
-    { title: "Absorção Geral", value: "82%", change: "+5.2%", changeType: "increase" as const },
-    { title: "Precisão nos Quizzes", value: "89%", change: "+3.1%", changeType: "increase" as const },
-  ], [serverData.length]);
+  /**
+   * KPIs do painel.
+   *
+   * "Absorção Geral 82%" e "Precisão nos Quizzes 89%" eram constantes escritas
+   * no código: apareciam iguais para qualquer prefeitura, inclusive uma sem
+   * nenhum servidor cadastrado. Um relatório inventado é pior que um relatório
+   * ausente — o secretário decide capacitação em cima disso.
+   */
+  const kpiData = useMemo(() => {
+    const active = summary?.activeUsers30d ?? 0;
+    return [
+      {
+        title: 'Ativos (30 dias)',
+        value: `${active}/${summary?.totalMembers ?? serverData.length}`,
+        hint: 'Servidores que abriram o app no último mês',
+      },
+      {
+        title: 'Acerto de primeira',
+        value: firstTryRate === null ? '—' : `${firstTryRate}%`,
+        hint: 'Questões resolvidas sem recapitular — mede domínio, não volume',
+      },
+      {
+        title: 'Quizzes respondidos',
+        value: (summary?.totalQuizzes ?? 0).toLocaleString('pt-BR'),
+        hint: 'Total de respostas, incluindo retentativas',
+      },
+    ];
+  }, [summary, firstTryRate, serverData.length]);
 
   // O painel expõe o desempenho de todos os servidores, então exige
   // identidade verificada — o e-mail sem senha do piloto não basta aqui.
@@ -728,7 +808,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
                         className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5"
                       >
                         <h3 className="text-white font-bold mb-3 truncate">{g.name}</h3>
-                        <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="grid grid-cols-4 gap-2 text-center">
                           <div>
                             <p className="text-xl font-bold text-white tabular-nums">
                               {g.members}
@@ -753,6 +833,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
                             </p>
                             <p className="text-xs text-slate-500">quizzes</p>
                           </div>
+                          <div>
+                            <p
+                              className={`text-xl font-bold tabular-nums ${firstTryColor(g.firstTryRate)}`}
+                            >
+                              {g.firstTryRate === null ? '—' : `${g.firstTryRate}%`}
+                            </p>
+                            <p className="text-xs text-slate-500">de 1ª</p>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -762,12 +850,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 {kpiData.map((kpi, index) => (
-                    <KPICard 
+                    <KPICard
                         key={index}
-                        title={kpi.title} 
-                        value={kpi.value} 
-                        change={kpi.change} 
-                        changeType={kpi.changeType} 
+                        title={kpi.title}
+                        value={kpi.value}
+                        hint={kpi.hint}
                     />
                 ))}
               </div>
@@ -833,9 +920,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onBack }) => {
                                     )}
                                 </div>
                             </div>
-                            <span className="font-mono bg-slate-900 border border-slate-700 text-slate-200 text-sm px-2 py-1 rounded">
-                                {score} pts
-                            </span>
+                            <div className="flex items-center gap-2">
+                                {/* Pontos medem volume percorrido; o acerto de
+                                    primeira mede domínio. Lado a lado porque a
+                                    diferença entre os dois é a informação. */}
+                                <span
+                                  className={`font-mono text-xs px-2 py-1 rounded border border-slate-700 bg-slate-900 ${firstTryColor(
+                                    memberFirstTry(user)
+                                  )}`}
+                                  title="Acerto na primeira tentativa"
+                                >
+                                    {memberFirstTry(user) === null ? '—' : `${memberFirstTry(user)}% de 1ª`}
+                                </span>
+                                <span className="font-mono bg-slate-900 border border-slate-700 text-slate-200 text-sm px-2 py-1 rounded">
+                                    {score} pts
+                                </span>
+                            </div>
                             </li>
                         );
                       })}

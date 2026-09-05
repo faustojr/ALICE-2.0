@@ -212,13 +212,15 @@ export async function reportQuizResult(
   email: string,
   variantId: string | undefined,
   correct: boolean,
-  cognitiveLevel?: string
+  cognitiveLevel?: string,
+  /** 1 na primeira resposta à questão, 2 em diante nas retentativas. */
+  attempt = 1
 ): Promise<QuizResultResponse | null> {
   try {
     const response = await fetch('/api/quizResult', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, variantId, correct, cognitiveLevel }),
+      body: JSON.stringify({ email, variantId, correct, cognitiveLevel, attempt }),
     });
     if (!response.ok) return null;
     return await response.json();

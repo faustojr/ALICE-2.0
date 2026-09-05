@@ -220,10 +220,21 @@ export async function getUser(email: string) {
  */
 export async function recordQuizOutcome(
   email: string,
-  { correct, pointsAwarded }: { correct: boolean; pointsAwarded: number }
+  {
+    correct,
+    pointsAwarded,
+    attempt,
+  }: { correct: boolean; pointsAwarded: number; attempt: number }
 ): Promise<{ correctAnswersTotal: number; points: number }> {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.users).doc(emailKey(email));
+
+  // Só a primeira tentativa de cada questão entra na taxa de acerto. O aluno
+  // pode tentar de novo quantas vezes quiser — isso é deliberado, o objetivo
+  // do ciclo é a experiência de êxito — mas o gestor precisa saber quem
+  // resolveu de primeira e quem chegou lá por insistência. Sem separar as
+  // duas coisas, todo mundo termina com a mesma nota.
+  const isFirstAttempt = attempt <= 1;
 
   await ref.set(
     {
@@ -231,6 +242,8 @@ export async function recordQuizOutcome(
       correctAnswersTotal: FieldValue.increment(correct ? 1 : 0),
       points: FieldValue.increment(pointsAwarded),
       quizCount: FieldValue.increment(1),
+      firstAttempts: FieldValue.increment(isFirstAttempt ? 1 : 0),
+      firstAttemptsCorrect: FieldValue.increment(isFirstAttempt && correct ? 1 : 0),
       lastAccess: new Date().toISOString(),
     },
     { merge: true }

@@ -20,6 +20,9 @@ export interface ManagerMember {
   highestModuleIndex: number;
   quizCount: number;
   correctQuizzesCount: Record<string, number> | null;
+  /** Questões respondidas sem recapitular, e quantas dessas foram certas. */
+  firstAttempts: number;
+  firstAttemptsCorrect: number;
   streakDays: number;
   specialties: Record<string, number>;
   bestTopic: string | null;
@@ -63,6 +66,8 @@ export interface GroupPerformance {
   active30d: number;
   averagePoints: number;
   totalQuizzes: number;
+  /** Acerto na primeira tentativa da turma, em %. null se ninguém respondeu. */
+  firstTryRate: number | null;
 }
 
 export interface ManagerOverview {
@@ -71,6 +76,8 @@ export interface ManagerOverview {
   members: ManagerMember[];
   surveys: ManagerSurvey[];
   groups: GroupPerformance[];
+  /** Acerto na primeira tentativa da prefeitura toda, em %. null se ninguém respondeu. */
+  firstTryRate: number | null;
   ungroupedMembers: number;
   billing: {
     hasContract: boolean;

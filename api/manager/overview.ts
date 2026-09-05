@@ -35,6 +35,12 @@ function toMember(data: Record<string, any>, id: string) {
     highestModuleIndex: Number(data.highestModuleIndex) || 0,
     quizCount: Number(data.quizCount) || 0,
     correctQuizzesCount: data.correctQuizzesCount ?? null,
+    // Acerto de primeira: a questão respondida certo sem recapitular. O
+    // servidor pode tentar de novo à vontade, e é assim que deve ser — mas
+    // volume percorrido e domínio são coisas diferentes, e é a segunda que
+    // o secretário precisa antes de decidir quem assina.
+    firstAttempts: Number(data.firstAttempts) || 0,
+    firstAttemptsCorrect: Number(data.firstAttemptsCorrect) || 0,
     streakDays: Number(data.streakDays) || 0,
     specialties: data.specialties ?? {},
     bestTopic: data.bestTopic ?? null,
@@ -187,6 +193,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const totalPoints = members.reduce((sum, m) => sum + m.points, 0);
     const totalQuizzes = members.reduce((sum, m) => sum + m.quizCount, 0);
 
+    /**
+     * Taxa de acerto de primeira, em porcentagem.
+     *
+     * `null` quando ainda não há tentativas: mostrar 0% para quem nunca
+     * respondeu diria ao gestor que a pessoa errou tudo, quando na verdade
+     * ela não começou. São situações opostas e exigem ações opostas.
+     */
+    const firstTryRate = (rows: { firstAttempts: number; firstAttemptsCorrect: number }[]) => {
+      const attempts = rows.reduce((sum, m) => sum + m.firstAttempts, 0);
+      if (attempts === 0) return null;
+      const hits = rows.reduce((sum, m) => sum + m.firstAttemptsCorrect, 0);
+      return Math.round((hits / attempts) * 100);
+    };
+
     // Desempenho por secretaria: é a leitura que o gestor leva à reunião.
     const byGroup = groups.map((g) => {
       const groupMembers = members.filter((m) => m.groupId === g.id);
@@ -200,6 +220,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         active30d: groupMembers.filter(isActive).length,
         averagePoints: groupMembers.length ? Math.round(points / groupMembers.length) : 0,
         totalQuizzes: quizzes,
+        firstTryRate: firstTryRate(groupMembers),
       };
     });
 
@@ -208,6 +229,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       scope: { tenantId, isSuperAdmin },
       members,
       surveys,
+      firstTryRate: firstTryRate(members),
       groups: byGroup,
       ungroupedMembers: members.filter((m) => !m.groupId).length,
       billing: billing

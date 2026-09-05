@@ -39,7 +39,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(429).json({ error: 'Muitas respostas em sequência.' });
     }
 
-    const { email, variantId, correct, cognitiveLevel } = req.body ?? {};
+    const { email, variantId, correct, cognitiveLevel, attempt } = req.body ?? {};
 
     if (!email) return res.status(400).json({ error: 'E-mail não informado.' });
     if (typeof correct !== 'boolean') {
@@ -60,6 +60,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const totals = await recordQuizOutcome(session.email, {
       correct,
       pointsAwarded,
+      // Cliente antigo não manda `attempt`. Tratar como primeira tentativa
+      // mantém o denominador honesto: nunca conta um acerto de segunda como
+      // se fosse de primeira.
+      attempt: Number(attempt) || 1,
     });
 
     const correctAfter = totals.correctAnswersTotal;

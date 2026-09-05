@@ -545,7 +545,8 @@ const MicrolearningFeed: React.FC<{
         email,
         currentModule?.variantId,
         value === 'correct',
-        currentModule?.cognitiveLevel
+        currentModule?.cognitiveLevel,
+        (userState.currentFailCount ?? 0) + 1
       )
         .then((result) => {
           if (!result?.progression) return;
